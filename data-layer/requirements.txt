@@ -1,0 +1,33 @@
+# Python 3.11 required
+
+# ── Web service (analysis microservice) ──────────────────────────────────────
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.0
+
+# ── Database ─────────────────────────────────────────────────────────────────
+psycopg2-binary>=2.9
+
+# ── Spatial data (import scripts) ────────────────────────────────────────────
+# GDAL must be installed first: brew install gdal
+# Then: pip install "gdal==$(gdal-config --version)"
+# GDAL>=3.4          # uncomment and pin to your installed version
+geopandas>=0.14
+shapely>=2.0
+pyproj>=3.6
+
+# ── Computer vision (building detection) ─────────────────────────────────────
+opencv-python>=4.9
+Pillow>=10.0
+numpy>=1.26
+scipy>=1.12
+
+# ── Pool detection ────────────────────────────────────────────────────────────
+ultralytics>=8.0      # YOLO — downloads model weights on first use
+
+# ── HTTP client ───────────────────────────────────────────────────────────────
+requests>=2.31
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0
+tqdm>=4.66
