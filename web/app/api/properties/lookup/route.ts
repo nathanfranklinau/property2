@@ -63,6 +63,28 @@ export async function GET(req: NextRequest) {
 
     const parcel = parcelResult.rows[0];
 
+    // Look up LGA (council) and zoning via spatial joins.
+    // These are cheap queries — LGA table is ~80 rows, both have GIST indexes.
+    // Queries run in parallel; gracefully return null if tables don't exist yet.
+    const [lgaResult, zoneResult] = await Promise.all([
+      db
+        .query<{ lga_name: string }>(
+          `SELECT lga_name FROM gnaf_admin_lga
+           WHERE ST_Within(ST_SetSRID(ST_MakePoint($1, $2), 7844), geom)
+           LIMIT 1`,
+          [lon, lat]
+        )
+        .catch(() => ({ rows: [] as { lga_name: string }[] })),
+      db
+        .query<{ zone_code: string; zone_name: string }>(
+          `SELECT zone_code, zone_name FROM qld_planning_zones
+           WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($1, $2), 7844), geometry)
+           LIMIT 1`,
+          [lon, lat]
+        )
+        .catch(() => ({ rows: [] as { zone_code: string; zone_name: string }[] })),
+    ]);
+
     return NextResponse.json({
       lot: parcel.lot,
       plan: parcel.plan,
@@ -74,6 +96,9 @@ export async function GET(req: NextRequest) {
       lat: parseFloat(parcel.centroid_lat as unknown as string),
       lon: parseFloat(parcel.centroid_lon as unknown as string),
       geometry: JSON.parse(parcel.geometry_json),
+      lga_name: lgaResult.rows[0]?.lga_name ?? null,
+      zone_code: zoneResult.rows[0]?.zone_code ?? null,
+      zone_name: zoneResult.rows[0]?.zone_name ?? null,
     });
   } catch (err) {
     console.error("Property lookup error:", err);

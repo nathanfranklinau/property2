@@ -13,12 +13,13 @@
  *     lot:            string   // from cadastre
  *     plan:           string
  *     lot_area_sqm:   number
- *     locality:       string
- *     shire_name:     string
  *     display_address: string
  *     lat:            number   // centroid of the parcel
  *     lon:            number
  *     geometry:       GeoJSON  // parcel boundary (for display)
+ *     lga_name:       string | null  // council name from spatial join
+ *     zone_code:      string | null  // planning zone code
+ *     zone_name:      string | null  // planning zone name
  *   }
  *
  * Returns:
@@ -41,6 +42,9 @@ export async function POST(req: NextRequest) {
     lat: number;
     lon: number;
     geometry: object;
+    lga_name: string | null;
+    zone_code: string | null;
+    zone_name: string | null;
   };
 
   try {
@@ -49,7 +53,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { lot, plan, lot_area_sqm, display_address, lat, lon, geometry } = body;
+  const { lot, plan, lot_area_sqm, display_address, lat, lon, geometry, lga_name, zone_code, zone_name } = body;
 
   if (!lot || !plan || !lat || !lon) {
     return NextResponse.json(
@@ -121,12 +125,15 @@ export async function POST(req: NextRequest) {
 
     // ── 2. Create parcel record ─────────────────────────────────────────
     const parcelInsert = await db.query<{ id: string }>(
-      `INSERT INTO parcels (cadastre_lot, cadastre_plan, lot_area_sqm, display_address, geometry)
-       VALUES ($1, $2, $3, $4, ST_SetSRID(ST_GeomFromGeoJSON($5), 7844))
+      `INSERT INTO parcels (cadastre_lot, cadastre_plan, lot_area_sqm, display_address, geometry, lga_name, zone_code, zone_name)
+       VALUES ($1, $2, $3, $4, ST_SetSRID(ST_GeomFromGeoJSON($5), 7844), $6, $7, $8)
        ON CONFLICT (cadastre_lot, cadastre_plan) DO UPDATE
-         SET display_address = EXCLUDED.display_address
+         SET display_address = EXCLUDED.display_address,
+             lga_name = COALESCE(EXCLUDED.lga_name, parcels.lga_name),
+             zone_code = COALESCE(EXCLUDED.zone_code, parcels.zone_code),
+             zone_name = COALESCE(EXCLUDED.zone_name, parcels.zone_name)
        RETURNING id`,
-      [lot, plan, lot_area_sqm, display_address, JSON.stringify(geometry)]
+      [lot, plan, lot_area_sqm, display_address, JSON.stringify(geometry), lga_name ?? null, zone_code ?? null, zone_name ?? null]
     );
     const parcelId = parcelInsert.rows[0].id;
 

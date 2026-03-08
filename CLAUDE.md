@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Purpose
 
-**SubdivideGuide** is a web application that helps Australian homeowners navigate the process of subdividing their land. A homeowner types their address, the app looks up their property from authoritative datasets, runs an automated analysis of the land and existing structures, and guides them step-by-step through every approval, consultation, and document needed to subdivide.
+**PropertyProfiler** (renamed from SubdivideGuide) is a property insights platform for Australian homeowners. A homeowner types their address, the app looks up their property from authoritative datasets, runs an automated analysis of the land and existing structures, and provides zoning, council, and subdivision intelligence.
 
-This is **not** a property investment tool. Audience: homeowners, not investors or developers.
+**Two audiences:** homeowners (single property analysis, Phase 1) and professionals (multi-property tracking, Phase 2).
 
 ---
 
@@ -23,7 +23,7 @@ Browser → Next.js (web/)           localhost:3000
 ```
 
 - **`data-layer/`** — Python 3.11. Import scripts (run manually to load datasets) + FastAPI analysis microservice (runs alongside Next.js).
-- **`web/`** — Next.js 15 App Router. Handles both frontend UI and API routes. Uses `pg` (node-postgres) directly — no ORM.
+- **`web/`** — Next.js 16 App Router. Handles both frontend UI, API routes, and blog (MDX). Uses `pg` (node-postgres) directly — no ORM.
 - **`db/migrations/`** — SQL files applied manually in order.
 
 ### On-demand analysis with caching
@@ -71,9 +71,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Import datasets (run once, or when datasets are refreshed)
-python import/import_gnaf.py
-python import/import_qld_cadastre.py
-python import/import_qld_pools.py
+python import/import_gnaf.py --data-dir <path>
+python import/import_qld_cadastre.py --gdb <path>
+python import/import_qld_pools.py --csv <path>
+python import/import_qld_lga.py --src <path>
+python import/import_qld_zones.py --src <path>
 
 # Analysis service
 uvicorn service.main:app --port 8001 --reload
@@ -86,6 +88,13 @@ Run SQL files in order against your local database:
 ```bash
 psql $DATABASE_URL -f db/migrations/001_immutable_datasets.sql
 psql $DATABASE_URL -f db/migrations/002_application_tables.sql
+psql $DATABASE_URL -f db/migrations/003_add_image_paths.sql
+psql $DATABASE_URL -f db/migrations/004_street_view.sql
+psql $DATABASE_URL -f db/migrations/005_styled_map.sql
+psql $DATABASE_URL -f db/migrations/006_building_footprints_geo.sql
+psql $DATABASE_URL -f db/migrations/007_qld_lga.sql
+psql $DATABASE_URL -f db/migrations/008_parcels_lga_zone.sql
+psql $DATABASE_URL -f db/migrations/009_qld_zones.sql
 ```
 
 ---
@@ -119,7 +128,7 @@ NEXTAUTH_URL=http://localhost:3000
 
 ## Database Rules
 
-- **Never add custom columns to immutable tables** — `gnaf_*`, `qld_cadastre_parcels`, `qld_pools_registered`. These are refreshed by import scripts and custom columns will be lost.
+- **Never add custom columns to immutable tables** — `gnaf_*`, `qld_cadastre_parcels`, `qld_pools_registered`, `qld_lga_boundaries`, `qld_planning_zones`. These are refreshed by import scripts and custom columns will be lost.
 - **All spatial data uses SRID 7844** (GDA2020). Never SRID 4326 (WGS84).
 - **No ORM.** Use `pg` with parameterised queries (`$1`, `$2`, …).
 - **`property_analysis` is parcel-centric** — one row per `lot/plan`, shared across users. Do not duplicate analysis per user.
@@ -137,8 +146,14 @@ NEXTAUTH_URL=http://localhost:3000
 | `data-layer/service/main.py` | FastAPI entry point |
 | `data-layer/service/analyser.py` | Analysis pipeline orchestrator |
 | `web/lib/db.ts` | pg connection pool |
+| `web/lib/blog.ts` | MDX blog post reader |
+| `web/lib/zone-rules.ts` | Static QLD zone rules lookup |
 | `web/app/api/analysis/request/route.ts` | POST — trigger or return cached analysis |
-| `web/app/api/analysis/[id]/status/route.ts` | GET — poll for analysis progress |
+| `web/app/api/analysis/status/route.ts` | GET — poll for analysis progress |
+| `web/app/(public)/page.tsx` | Home page (address search) |
+| `web/app/(public)/blog/page.tsx` | Blog index |
+| `web/app/(public)/blog/[slug]/page.tsx` | Blog post page (SSG) |
+| `web/content/blog/*.mdx` | Blog post content (MDX with frontmatter) |
 
 ---
 
@@ -155,8 +170,8 @@ python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')"
 
 ## Project Phases
 
-- **Phase 1 (current):** Public prototype — address search, property analysis, results. No auth required.
-- **Phase 2:** Auth + paywall — login, save properties, start subdivision journey, step tracking.
+- **Phase 1 (current):** Public prototype — address search, property analysis, LGA/zoning lookup, blog. No auth required. Unauthenticated proof of concept for market validation.
+- **Phase 2:** Auth + paywall — login, save properties/markups, multi-property tracking, subdivision journey, step tracking.
 - **Phase 3:** Multi-state — NSW, VIC support. Schema already includes `state`/`jurisdiction` columns.
 
 ---

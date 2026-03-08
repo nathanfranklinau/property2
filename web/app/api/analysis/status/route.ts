@@ -41,6 +41,9 @@ export async function GET(req: NextRequest) {
       boundary_coords_gda94: number[][] | null;
       centroid_lat: number | null;
       centroid_lon: number | null;
+      lga_name: string | null;
+      zone_code: string | null;
+      zone_name: string | null;
     }>(
       `SELECT
          p.id               AS parcel_id,
@@ -48,6 +51,9 @@ export async function GET(req: NextRequest) {
          p.cadastre_plan,
          p.lot_area_sqm,
          p.display_address,
+         p.lga_name,
+         p.zone_code,
+         p.zone_name,
          pa.image_status,
          pa.analysis_status,
          pa.main_house_size_sqm,

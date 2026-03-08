@@ -8,6 +8,7 @@ import { APIProvider, Map, useMap } from "@vis.gl/react-google-maps";
 export type BuildingFootprint = {
   area_sqm: number;
   coords: [number, number][]; // [lat, lon]
+  hasBuffer?: boolean;
 };
 
 type DrawMode = "edit" | "draw-polygon" | "draw-rectangle";
@@ -227,6 +228,122 @@ function toTuples(coords: LatLng[]): [number, number][] {
   return coords.map((c) => [c.lat, c.lng]);
 }
 
+/**
+ * Expand a polygon outward by `radiusM` metres using a miter-join offset.
+ * Works in local Cartesian space (metres) at the polygon's centroid latitude.
+ */
+function offsetPolygon(coords: LatLng[], radiusM: number): LatLng[] {
+  if (coords.length < 3) return coords;
+  const centroid = polygonCentroid(coords);
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos((centroid.lat * Math.PI) / 180);
+
+  // Convert to local metres
+  const pts = coords.map((c) => ({
+    x: (c.lng - centroid.lng) * mPerLng,
+    y: (c.lat - centroid.lat) * mPerLat,
+  }));
+
+  // Ensure CCW winding in local (x=lng, y=lat) space.
+  // _polygonSignedArea uses (lat,lng) as (x,y), so positive there means CW in local space — reverse it.
+  const localPts = _polygonSignedArea(coords) >= 0 ? [...pts].reverse() : pts;
+  const n = localPts.length;
+  const result: { x: number; y: number }[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const prev = localPts[(i - 1 + n) % n];
+    const curr = localPts[i];
+    const next = localPts[(i + 1) % n];
+
+    const e1 = { x: curr.x - prev.x, y: curr.y - prev.y };
+    const e2 = { x: next.x - curr.x, y: next.y - curr.y };
+    const len1 = Math.sqrt(e1.x * e1.x + e1.y * e1.y);
+    const len2 = Math.sqrt(e2.x * e2.x + e2.y * e2.y);
+    if (len1 === 0 || len2 === 0) {
+      result.push(curr);
+      continue;
+    }
+
+    // Outward normals (right-hand perp for CCW polygon)
+    const n1 = { x: e1.y / len1, y: -e1.x / len1 };
+    const n2 = { x: e2.y / len2, y: -e2.x / len2 };
+
+    // Bisector of the two outward normals
+    const bx = n1.x + n2.x;
+    const by = n1.y + n2.y;
+    const blen = Math.sqrt(bx * bx + by * by);
+    if (blen < 1e-9) {
+      result.push({ x: curr.x + n1.x * radiusM, y: curr.y + n1.y * radiusM });
+      continue;
+    }
+
+    // Miter length = radius / dot(bisector_norm, n1); cap at 2× radius for sharp corners
+    const dot = (bx / blen) * n1.x + (by / blen) * n1.y;
+    const miterLen = Math.min(radiusM / Math.max(dot, 0.1), radiusM * 2);
+
+    if (dot < 0.5) {
+      // Sharp corner (> ~120°) — insert arc points instead of a miter spike
+      const startAngle = Math.atan2(n1.y, n1.x);
+      const endAngle = Math.atan2(n2.y, n2.x);
+      let sweep = endAngle - startAngle;
+      if (sweep < 0) sweep += 2 * Math.PI;
+      if (sweep > Math.PI) sweep -= 2 * Math.PI;
+      const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 8)));
+      for (let s = 0; s <= steps; s++) {
+        const a = startAngle + (sweep * s) / steps;
+        result.push({ x: curr.x + Math.cos(a) * radiusM, y: curr.y + Math.sin(a) * radiusM });
+      }
+    } else {
+      result.push({ x: curr.x + (bx / blen) * miterLen, y: curr.y + (by / blen) * miterLen });
+    }
+  }
+
+  return result.map((p) => ({
+    lat: centroid.lat + p.y / mPerLat,
+    lng: centroid.lng + p.x / mPerLng,
+  }));
+}
+
+/**
+ * Returns the outer ring of the 2m buffer around `fp`, clipped to `boundary`.
+ * Returns null if the result is degenerate.
+ */
+export function computeBufferCoords(
+  fp: BuildingFootprint,
+  boundary: [number, number][]
+): [number, number][] | null {
+  const boundaryLatLng = boundary.map(([lat, lng]) => ({ lat, lng }));
+  const expanded = offsetPolygon(toLatLngs(fp.coords), 2);
+  const clipped = clipPolygonToBoundary(expanded, boundaryLatLng);
+  if (!clipped) return null;
+  return toTuples(clipped);
+}
+
+/** Length of the edge from a to b in metres. */
+function edgeLengthM(a: LatLng, b: LatLng): number {
+  const mPerLat = 111320;
+  const mPerLng = 111320 * Math.cos(((a.lat + b.lat) / 2 * Math.PI) / 180);
+  const dy = (b.lat - a.lat) * mPerLat;
+  const dx = (b.lng - a.lng) * mPerLng;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** Build a Google Maps icon for a measurement label rotated to align with an edge. */
+function makeMeasurementIcon(distM: number, angleDeg: number): google.maps.Icon {
+  const text = distM >= 10 ? `${Math.round(distM)}m` : `${distM.toFixed(1)}m`;
+  const pillW = Math.ceil(text.length * 6.2 + 14);
+  const pillH = 16;
+  const S = 72; // SVG canvas size — large enough for any rotation
+  const cx = S / 2;
+  const cy = S / 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><g transform="rotate(${angleDeg.toFixed(1)},${cx},${cy})"><rect x="${cx - pillW / 2}" y="${cy - pillH / 2}" width="${pillW}" height="${pillH}" rx="${pillH / 2}" fill="#111827" fill-opacity="0.72"/><text x="${cx}" y="${cy + 4.5}" font-family="-apple-system,BlinkMacSystemFont,Helvetica,sans-serif" font-size="10" font-weight="600" letter-spacing="0.01em" fill="white" text-anchor="middle">${text}</text></g></svg>`;
+  return {
+    url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+    scaledSize: new google.maps.Size(S, S),
+    anchor: new google.maps.Point(cx, cy),
+  };
+}
+
 /** Perpendicular distance from point to line segment (a→b). */
 function perpendicularDist(p: LatLng, a: LatLng, b: LatLng): number {
   const dx = b.lat - a.lat;
@@ -362,6 +479,10 @@ function MapToolbar({
   canRedo,
   onUndo,
   onRedo,
+  selectedHasBuffer,
+  onToggleBuffer,
+  showMeasurements,
+  onToggleMeasurements,
 }: {
   mode: DrawMode;
   setMode: (m: DrawMode) => void;
@@ -373,6 +494,10 @@ function MapToolbar({
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  selectedHasBuffer: boolean;
+  onToggleBuffer: () => void;
+  showMeasurements: boolean;
+  onToggleMeasurements: () => void;
 }) {
   return (
     <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-white/95 backdrop-blur rounded-lg shadow-lg px-1.5 py-1 border border-zinc-200">
@@ -454,6 +579,19 @@ function MapToolbar({
               />
             </svg>
           </ToolBtn>
+
+          <Sep />
+
+          <ToolBtn
+            active={selectedHasBuffer}
+            onClick={onToggleBuffer}
+            title={selectedHasBuffer ? "Remove 2m buffer" : "Add 2m buffer"}
+          >
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
+              <rect x="3" y="3" width="14" height="14" rx="1" />
+              <rect x="6.5" y="6.5" width="7" height="7" rx="0.5" />
+            </svg>
+          </ToolBtn>
         </>
       )}
 
@@ -475,6 +613,18 @@ function MapToolbar({
             d="M12.207 2.232a.75.75 0 00.025 1.06l4.146 3.958H6.375a5.375 5.375 0 000 10.75H9.25a.75.75 0 000-1.5H6.375a3.875 3.875 0 010-7.75h10.003l-4.146 3.957a.75.75 0 001.036 1.085l5.5-5.25a.75.75 0 000-1.085l-5.5-5.25a.75.75 0 00-1.06.025z"
             clipRule="evenodd"
           />
+        </svg>
+      </ToolBtn>
+
+      <Sep />
+
+      <ToolBtn active={showMeasurements} onClick={onToggleMeasurements} title={showMeasurements ? "Hide measurements" : "Show measurements"}>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="7" width="16" height="6" rx="1" />
+          <line x1="5" y1="7" x2="5" y2="10" />
+          <line x1="8" y1="7" x2="8" y2="9" />
+          <line x1="11" y1="7" x2="11" y2="9" />
+          <line x1="14" y1="7" x2="14" y2="10" />
         </svg>
       </ToolBtn>
     </div>
@@ -533,6 +683,7 @@ function MapInterior({
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [drawingVertices, setDrawingVertices] = useState<LatLng[]>([]);
   const [rectFirstCorner, setRectFirstCorner] = useState<LatLng | null>(null);
+  const [showMeasurements, setShowMeasurements] = useState(false);
 
   const { pushChange, undo, redo, canUndo, canRedo } = useHistory(
     footprints,
@@ -543,6 +694,8 @@ function MapInterior({
   const maskPolyRef = useRef<google.maps.Polygon | null>(null);
   const boundaryPolyRef = useRef<google.maps.Polygon | null>(null);
   const buildingPolysRef = useRef<google.maps.Polygon[]>([]);
+  const bufferPolysRef = useRef<google.maps.Polygon[]>([]);
+  const measureMarkersRef = useRef<google.maps.Marker[]>([]);
   const drawingPolylineRef = useRef<google.maps.Polyline | null>(null);
   const vertexMarkersRef = useRef<google.maps.Marker[]>([]);
   const mapClickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
@@ -593,6 +746,7 @@ function MapInterior({
       next[selectedIndex] = {
         area_sqm: approxAreaSqm(confined),
         coords: toTuples(confined),
+        hasBuffer: fp.hasBuffer,
       };
       pushChange(next);
     },
@@ -619,11 +773,20 @@ function MapInterior({
       next[selectedIndex] = {
         area_sqm: approxAreaSqm(clamped),
         coords: toTuples(clamped),
+        hasBuffer: fp.hasBuffer,
       };
       pushChange(next);
     },
     [selectedIndex, footprints, boundaryPath, pushChange]
   );
+
+  // Toggle 2m buffer on selected polygon
+  const handleToggleBuffer = useCallback(() => {
+    if (selectedIndex === null) return;
+    const next = [...footprints];
+    next[selectedIndex] = { ...next[selectedIndex], hasBuffer: !next[selectedIndex].hasBuffer };
+    pushChange(next);
+  }, [selectedIndex, footprints, pushChange]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -688,6 +851,7 @@ function MapInterior({
       const newFp: BuildingFootprint = {
         area_sqm: approxAreaSqm(clamped),
         coords: toTuples(clamped),
+        hasBuffer: true,
       };
       pushChange([...footprints, newFp]);
       setDrawingVertices([]);
@@ -822,6 +986,7 @@ function MapInterior({
           next[idx] = {
             area_sqm: approxAreaSqm(updatedPath),
             coords: toTuples(updatedPath),
+            hasBuffer: footprints[idx].hasBuffer,
           };
           pushChange(next);
         };
@@ -846,6 +1011,85 @@ function MapInterior({
       }
     };
   }, [map, footprints, selectedIndex, mode, boundaryPath, pushChange]);
+
+  // ── Render buffer polygons (2m red ring around buildings with hasBuffer) ──
+  useEffect(() => {
+    if (!map) return;
+
+    for (const p of bufferPolysRef.current) p.setMap(null);
+    bufferPolysRef.current = [];
+
+    footprints.forEach((fp, fpIdx) => {
+      if (!fp.hasBuffer) return;
+      const bufCoords = computeBufferCoords(fp, boundaryCoords);
+      if (!bufCoords) return;
+      // Outer ring = buffer boundary, inner hole = own building footprint
+      // Other buildings don't need holes — they render at higher zIndex and paint over the buffer
+      const outerPath = bufCoords.map(([lat, lng]) => ({ lat, lng }));
+      const holePath = [...fp.coords].map(([lat, lng]) => ({ lat, lng })).reverse();
+      const poly = new google.maps.Polygon({
+        paths: [outerPath, holePath],
+        fillColor: "#EF4444",
+        fillOpacity: 0.35,
+        strokeColor: "#DC2626",
+        strokeWeight: 1,
+        strokeOpacity: 0.6,
+        clickable: false,
+        zIndex: 5,
+        map,
+      });
+      bufferPolysRef.current.push(poly);
+    });
+
+    return () => {
+      for (const p of bufferPolysRef.current) p.setMap(null);
+      bufferPolysRef.current = [];
+    };
+  }, [map, footprints, boundaryCoords, boundaryPath]);
+
+  // ── Edge measurement labels ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!map) return;
+
+    for (const m of measureMarkersRef.current) m.setMap(null);
+    measureMarkersRef.current = [];
+
+    if (!showMeasurements) return;
+
+    footprints.forEach((fp) => {
+      const path = toLatLngs(fp.coords);
+      const n = path.length;
+      for (let i = 0; i < n; i++) {
+        const a = path[i];
+        const b = path[(i + 1) % n];
+        const distM = edgeLengthM(a, b);
+        if (distM < 1.5) continue; // skip edges too short to label
+
+        const mid: LatLng = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
+
+        // Angle in screen coords (x = east, y = south-down), keep text upright
+        const mPerLat = 111320;
+        const mPerLng = 111320 * Math.cos((mid.lat * Math.PI) / 180);
+        let angle = (Math.atan2(-(b.lat - a.lat) * mPerLat, (b.lng - a.lng) * mPerLng) * 180) / Math.PI;
+        if (angle > 90) angle -= 180;
+        if (angle < -90) angle += 180;
+
+        const marker = new google.maps.Marker({
+          position: mid,
+          icon: makeMeasurementIcon(distM, angle),
+          clickable: false,
+          zIndex: 25,
+          map,
+        });
+        measureMarkersRef.current.push(marker);
+      }
+    });
+
+    return () => {
+      for (const m of measureMarkersRef.current) m.setMap(null);
+      measureMarkersRef.current = [];
+    };
+  }, [map, footprints, showMeasurements]);
 
   // ── Rotation drag: live rotate on mousemove, commit on mouseup ──────────
   useEffect(() => {
@@ -900,6 +1144,7 @@ function MapInterior({
         next[state.polyIndex] = {
           area_sqm: approxAreaSqm(confined),
           coords: toTuples(confined),
+          hasBuffer: footprintsRef.current[state.polyIndex].hasBuffer,
         };
         pushChangeRef.current(next);
       }
@@ -1090,6 +1335,10 @@ function MapInterior({
       canRedo={canRedo}
       onUndo={undo}
       onRedo={redo}
+      selectedHasBuffer={selectedIndex !== null ? (footprints[selectedIndex]?.hasBuffer ?? false) : false}
+      onToggleBuffer={handleToggleBuffer}
+      showMeasurements={showMeasurements}
+      onToggleMeasurements={() => setShowMeasurements((v) => !v)}
     />
   );
 }

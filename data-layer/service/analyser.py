@@ -251,6 +251,8 @@ def run_analysis(
 
         main_house_sqm = detection.get("main_house_size_sqm", 0.0)
         building_count = detection.get("building_count", 0)
+        # Union area from mask pixel count — all buildings, no double-counting
+        total_buildings_sqm = detection.get("total_buildings_sqm", main_house_sqm)
         boundary_mask = detection.get("_boundary_mask")
         boundary_contour = detection.get("_boundary_contour")
         building_contours = detection.get("_building_contours", [])
@@ -331,11 +333,13 @@ def run_analysis(
             update_analysis(conn, parcel_id, image_mask2_path=str(mask2_path))
 
         # ── Step 7: Calculate available space ─────────────────────────────
-        # Available = lot area - main house footprint - pool area - setback buffer
+        # Available = lot area - ALL building footprints (union) - pool area - setback buffer
+        # Using total_buildings_sqm (from mask pixel count) avoids double-counting
+        # when detected building contours overlap.
         SETBACK_BUFFER_SQM = 50
         available_space = max(
             0.0,
-            lot_area_sqm - main_house_sqm - pool_area_sqm - SETBACK_BUFFER_SQM,
+            lot_area_sqm - total_buildings_sqm - pool_area_sqm - SETBACK_BUFFER_SQM,
         )
 
         update_analysis(
@@ -348,8 +352,8 @@ def run_analysis(
 
         log.info(
             f"Analysis complete for parcel {parcel_id}: "
-            f"house={main_house_sqm}m², pools={pool_count_detected}, "
-            f"available={available_space:.1f}m²"
+            f"house={main_house_sqm}m², all_buildings={total_buildings_sqm}m², "
+            f"pools={pool_count_detected}, available={available_space:.1f}m²"
         )
 
     except Exception as e:

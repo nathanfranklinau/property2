@@ -136,6 +136,7 @@ def detect_buildings(
         "main_house_size_sqm": 0.0,
         "building_count": 0,
         "all_buildings_sqm": [],
+        "total_buildings_sqm": 0.0,
         "_boundary_mask": None,
         "_boundary_contour": None,
         "_building_contours": [],
@@ -210,6 +211,12 @@ def detect_buildings(
     building_mask = cv2.morphologyEx(building_mask, cv2.MORPH_OPEN, kernel, iterations=2)
     building_mask = cv2.morphologyEx(building_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
+    # ── Compute total building coverage from the mask (true union) ────────
+    # Using pixel count from the binary mask ensures overlapping detections
+    # are NOT double-counted — each pixel is counted exactly once regardless
+    # of how many contours cover it.
+    total_buildings_sqm = round(int(np.count_nonzero(building_mask)) * sqm_per_pixel, 1)
+
     # ── Extract and filter contours ───────────────────────────────────────
     bld_contours, _ = cv2.findContours(
         building_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -239,6 +246,8 @@ def detect_buildings(
         "main_house_size_sqm": main_house_sqm,
         "building_count": len(building_areas_sqm),
         "all_buildings_sqm": building_areas_sqm,
+        # Union area from mask pixel count — immune to contour overlap issues
+        "total_buildings_sqm": total_buildings_sqm,
         "_boundary_mask": boundary_mask,
         "_boundary_contour": boundary_contour,
         "_building_contours": valid_contours,

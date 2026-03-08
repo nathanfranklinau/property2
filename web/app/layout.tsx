@@ -8,9 +8,9 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "SubdivideGuide — QLD Property Analysis",
+  title: "PropertyProfiler — QLD Property Intelligence",
   description:
-    "Find out if your Queensland property has subdivision potential. Step-by-step guidance through the approval process.",
+    "Analyse your Queensland property — lot boundaries, structures, zoning, available space, and subdivision potential.",
 };
 
 export default function RootLayout({
