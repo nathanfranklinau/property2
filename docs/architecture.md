@@ -70,11 +70,12 @@ Python 3.11. Single venv at `data-layer/venv`. All scripts use `.env` for config
 
 | Script | Source data | Tables populated |
 |---|---|---|
-| `import/import_gnaf.py` | GNAF PSV files | `gnaf_address_detail`, `gnaf_address_site_geocode`, `gnaf_locality`, `gnaf_state` |
+| `import/import_gnaf_full.py` | GNAF PSV files (all states) | `gnaf_data_*` — 35 tables (all states, all address/street/locality data) |
 | `import/import_qld_cadastre.py` | QLD DCDB GeoPackage | `qld_cadastre_parcels` |
 | `import/import_qld_pools.py` | QLD pools CSV | `qld_pools_registered` |
 | `import/import_qld_lga.py` | QLD LGA boundaries (GeoPackage/Shapefile) | `qld_lga_boundaries` |
 | `import/import_qld_zones.py` | QLD Planning Scheme Zones (GeoPackage/Shapefile) | `qld_planning_zones` |
+| `import/import_admin_boundaries.py` | Geoscape Admin Boundaries (all states) | `gnaf_admin_lga`, `gnaf_admin_localities`, `gnaf_admin_state_boundaries`, `gnaf_admin_wards` |
 
 **These scripts are deliberately simple** — the previous versions had Docker-specific complexity that is not needed when running native PostgreSQL on macOS. The simplified versions use `psycopg2.copy_expert` for GNAF and `ogr2ogr` for spatial datasets.
 
@@ -198,7 +199,7 @@ Applied in order via `psql $DATABASE_URL -f db/migrations/NNN_*.sql`:
 
 | Migration | Purpose |
 |---|---|
-| `001_immutable_datasets.sql` | GNAF, Cadastre, Pools table schemas |
+| `001_immutable_datasets.sql` | Cadastre, Pools table schemas (+ old partial GNAF tables, dropped in 012) |
 | `002_application_tables.sql` | parcels, property_analysis, Phase 2 tables |
 | `003_add_image_paths.sql` | satellite_masked + mask2 image path columns |
 | `004_street_view.sql` | Street view image path column |
@@ -207,14 +208,28 @@ Applied in order via `psql $DATABASE_URL -f db/migrations/NNN_*.sql`:
 | `007_qld_lga.sql` | QLD LGA boundary polygons table |
 | `008_parcels_lga_zone.sql` | Add lga_name, zone_code, zone_name to parcels |
 | `009_qld_zones.sql` | QLD planning zone polygons table |
+| `010_admin_boundaries.sql` | Geoscape admin boundary tables (all states) |
+| `011_gnaf_full_dataset.sql` | Full GNAF dataset — 35 gnaf_data_* tables |
+| `012_drop_old_gnaf_tables.sql` | Drop partial gnaf_* tables superseded by gnaf_data_* |
 
 ### Immutable Tables (never modify, never add custom columns)
 
-**`gnaf_address_detail`** — ~16M Australian addresses
-Key fields: `address_detail_pid`, `locality_pid`, `number_first`, `postcode`
+**`gnaf_data_address_detail`** — ~16.8M Australian addresses (all states)
+Key fields: `address_detail_pid`, `locality_pid`, `street_locality_pid`, `number_first`, `postcode`
 
-**`gnaf_address_site_geocode`** — address coordinates
-Key fields: `address_detail_pid`, `longitude`, `latitude`, `geometry` (Point, SRID 7844)
+**`gnaf_data_address_site_geocode`** — ~20.6M address coordinates
+Key fields: `address_site_geocode_pid`, `address_site_pid`, `longitude`, `latitude`, `geometry` (Point, SRID 7844)
+
+**`gnaf_data_address_default_geocode`** — default geocode per address (~16.8M)
+Key fields: `address_default_geocode_pid`, `address_detail_pid`, `longitude`, `latitude`, `geometry` (Point, SRID 7844)
+
+**`gnaf_data_street_locality`** — ~764K streets
+Key fields: `street_locality_pid`, `street_name`, `street_type_code`, `locality_pid`
+
+**`gnaf_data_locality`** — ~17.6K localities (suburbs/towns)
+Key fields: `locality_pid`, `locality_name`, `primary_postcode`, `state_pid`
+
+**`gnaf_data_state`** — 9 states/territories
 
 **`qld_cadastre_parcels`** — ~3.4M QLD property boundaries
 Key fields: `lot`, `plan`, `lot_area` (m²), `geometry` (MultiPolygon, SRID 7844)

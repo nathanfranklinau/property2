@@ -71,11 +71,12 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Import datasets (run once, or when datasets are refreshed)
-python import/import_gnaf.py --data-dir <path>
+python import/import_gnaf_full.py --data-dir <path>   # Full GNAF (all 35 tables, all states)
 python import/import_qld_cadastre.py --gdb <path>
 python import/import_qld_pools.py --csv <path>
 python import/import_qld_lga.py --src <path>
 python import/import_qld_zones.py --src <path>
+python import/import_admin_boundaries.py --src <path>
 
 # Analysis service
 uvicorn service.main:app --port 8001 --reload
@@ -95,6 +96,9 @@ psql $DATABASE_URL -f db/migrations/006_building_footprints_geo.sql
 psql $DATABASE_URL -f db/migrations/007_qld_lga.sql
 psql $DATABASE_URL -f db/migrations/008_parcels_lga_zone.sql
 psql $DATABASE_URL -f db/migrations/009_qld_zones.sql
+psql $DATABASE_URL -f db/migrations/010_admin_boundaries.sql
+psql $DATABASE_URL -f db/migrations/011_gnaf_full_dataset.sql
+psql $DATABASE_URL -f db/migrations/012_drop_old_gnaf_tables.sql
 ```
 
 ---
@@ -128,7 +132,7 @@ NEXTAUTH_URL=http://localhost:3000
 
 ## Database Rules
 
-- **Never add custom columns to immutable tables** — `gnaf_*`, `qld_cadastre_parcels`, `qld_pools_registered`, `qld_lga_boundaries`, `qld_planning_zones`. These are refreshed by import scripts and custom columns will be lost.
+- **Never add custom columns to immutable tables** — `gnaf_data_*`, `gnaf_admin_*`, `qld_cadastre_parcels`, `qld_pools_registered`, `qld_lga_boundaries`, `qld_planning_zones`. These are refreshed by import scripts and custom columns will be lost.
 - **All spatial data uses SRID 7844** (GDA2020). Never SRID 4326 (WGS84).
 - **No ORM.** Use `pg` with parameterised queries (`$1`, `$2`, …).
 - **`property_analysis` is parcel-centric** — one row per `lot/plan`, shared across users. Do not duplicate analysis per user.
@@ -141,7 +145,8 @@ NEXTAUTH_URL=http://localhost:3000
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Full system architecture |
 | [docs/subdivision-process.md](docs/subdivision-process.md) | QLD subdivision steps (source for journey_steps seed data) |
-| [db/migrations/001_immutable_datasets.sql](db/migrations/001_immutable_datasets.sql) | GNAF, Cadastre, Pools table schemas |
+| [db/migrations/001_immutable_datasets.sql](db/migrations/001_immutable_datasets.sql) | GNAF (partial), Cadastre, Pools table schemas |
+| [db/migrations/011_gnaf_full_dataset.sql](db/migrations/011_gnaf_full_dataset.sql) | Full GNAF dataset (35 tables, gnaf_data_* prefix) |
 | [db/migrations/002_application_tables.sql](db/migrations/002_application_tables.sql) | App table schemas (parcels, property_analysis, …) |
 | `data-layer/service/main.py` | FastAPI entry point |
 | `data-layer/service/analyser.py` | Analysis pipeline orchestrator |
