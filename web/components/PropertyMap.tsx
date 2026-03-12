@@ -60,29 +60,10 @@ const MAX_HISTORY = 50;
 const NUDGE_STEP = 0.00001;
 // Rotation step in degrees per button click
 const ROTATE_STEP = 15;
+// Clearance zone radius in metres (shown as red ring around buildings)
+const BUFFER_RADIUS_M = 1;
 
 // ─── Geometry helpers ───────────────────────────────────────────────────────
-
-/** Compute the Google Maps zoom level that fits a lat/lng span into a pixel size.
- *  mapWidth/mapHeight are the map container dimensions in pixels.
- *  Uses 256px tile size and Mercator projection for latitude. */
-function boundsToZoom(coords: [number, number][], mapWidth = 600, mapHeight = 450): number {
-  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-  for (const [lat, lng] of coords) {
-    if (lat < minLat) minLat = lat;
-    if (lat > maxLat) maxLat = lat;
-    if (lng < minLng) minLng = lng;
-    if (lng > maxLng) maxLng = lng;
-  }
-  const TILE = 256;
-  const latFrac = (lat: number) => {
-    const sin = Math.sin((lat * Math.PI) / 180);
-    return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI));
-  };
-  const lngZoom = Math.log2((mapWidth / TILE) * (360 / (maxLng - minLng || 0.0001)));
-  const latZoom = Math.log2((mapHeight / TILE) / Math.abs(latFrac(minLat) - latFrac(maxLat) || 0.0001));
-  return Math.floor(Math.min(lngZoom, latZoom)) - 1; // -1 adds a small padding margin
-}
 
 
 function pointInPolygon(point: LatLng, polygon: LatLng[]): boolean {
@@ -339,7 +320,7 @@ function offsetPolygon(coords: LatLng[], radiusM: number): LatLng[] {
 }
 
 /**
- * Returns the outer ring of the 2m buffer around `fp`, clipped to `boundary`.
+ * Returns the outer ring of the clearance zone around `fp`, clipped to `boundary`.
  * Returns null if the result is degenerate.
  */
 export function computeBufferCoords(
@@ -347,7 +328,7 @@ export function computeBufferCoords(
   boundary: [number, number][]
 ): [number, number][] | null {
   const boundaryLatLng = boundary.map(([lat, lng]) => ({ lat, lng }));
-  const expanded = offsetPolygon(toLatLngs(fp.coords), 2);
+  const expanded = offsetPolygon(toLatLngs(fp.coords), BUFFER_RADIUS_M);
   const clipped = clipPolygonToBoundary(expanded, boundaryLatLng);
   if (!clipped) return null;
   return toTuples(clipped);
@@ -634,7 +615,7 @@ function MapToolbar({
           <ToolBtn
             active={selectedHasBuffer}
             onClick={onToggleBuffer}
-            title={selectedHasBuffer ? "Remove 2m buffer" : "Add 2m buffer"}
+            title={selectedHasBuffer ? `Remove ${BUFFER_RADIUS_M}m clearance` : `Add ${BUFFER_RADIUS_M}m clearance`}
           >
             <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
               <rect x="3" y="3" width="14" height="14" rx="1" />
@@ -735,6 +716,13 @@ function MapInterior({
   complexBoundary?: [number, number][][];
 }) {
   const map = useMap();
+
+  useEffect(() => {
+    if (!map || boundaryCoords.length === 0) return;
+    const bounds = new google.maps.LatLngBounds();
+    for (const [lat, lng] of boundaryCoords) bounds.extend({ lat, lng });
+    map.fitBounds(bounds, 40);
+  }, [map, boundaryCoords]);
 
   const [mode, setMode] = useState<DrawMode>("edit");
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -839,7 +827,7 @@ function MapInterior({
     [selectedIndex, footprints, boundaryPath, pushChange]
   );
 
-  // Toggle 2m buffer on selected polygon
+  // Toggle clearance zone on selected polygon
   const handleToggleBuffer = useCallback(() => {
     if (selectedIndex === null) return;
     const next = [...footprints];
@@ -1101,7 +1089,7 @@ function MapInterior({
     };
   }, [map, footprints, selectedIndex, mode, boundaryPath, pushChange]);
 
-  // ── Render buffer polygons (2m red ring around buildings with hasBuffer) ──
+  // ── Render clearance polygons (red ring around buildings with hasBuffer) ──
   useEffect(() => {
     if (!map) return;
 
@@ -1200,8 +1188,7 @@ function MapInterior({
 
     if (!showMeasurements) return;
 
-    footprints.forEach((fp) => {
-      const path = toLatLngs(fp.coords);
+    const addEdgeLabels = (path: LatLng[], zIndex: number) => {
       const n = path.length;
       for (let i = 0; i < n; i++) {
         const a = path[i];
@@ -1211,7 +1198,6 @@ function MapInterior({
 
         const mid: LatLng = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
 
-        // Angle in screen coords (x = east, y = south-down), keep text upright
         const mPerLat = 111320;
         const mPerLng = 111320 * Math.cos((mid.lat * Math.PI) / 180);
         let angle = (Math.atan2(-(b.lat - a.lat) * mPerLat, (b.lng - a.lng) * mPerLng) * 180) / Math.PI;
@@ -1222,10 +1208,22 @@ function MapInterior({
           position: mid,
           icon: makeMeasurementIcon(distM, angle),
           clickable: false,
-          zIndex: 25,
+          zIndex,
           map,
         });
         measureMarkersRef.current.push(marker);
+      }
+    };
+
+    // Boundary edges
+    addEdgeLabels(boundaryPath, 24);
+
+    // Building footprint edges + buffer edges
+    footprints.forEach((fp) => {
+      addEdgeLabels(toLatLngs(fp.coords), 25);
+      if (fp.hasBuffer) {
+        const bufCoords = computeBufferCoords(fp, boundaryCoords);
+        if (bufCoords) addEdgeLabels(toLatLngs(bufCoords), 23);
       }
     });
 
@@ -1233,7 +1231,7 @@ function MapInterior({
       for (const m of measureMarkersRef.current) m.setMap(null);
       measureMarkersRef.current = [];
     };
-  }, [map, footprints, showMeasurements]);
+  }, [map, footprints, boundaryPath, boundaryCoords, showMeasurements]);
 
   // ── Rotation drag: live rotate on mousemove, commit on mouseup ──────────
   useEffect(() => {
@@ -1500,14 +1498,12 @@ export default function PropertyMap({
   readOnly,
   complexBoundary,
 }: PropertyMapProps) {
-  const defaultZoom = useMemo(() => boundsToZoom(boundaryCoords), [boundaryCoords]);
-
   return (
     <APIProvider apiKey={apiKey}>
       <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden border border-zinc-200">
         <Map
           defaultCenter={centroid}
-          defaultZoom={defaultZoom}
+          defaultZoom={19}
           mapTypeId="satellite"
           disableDefaultUI={true}
           zoomControl={true}

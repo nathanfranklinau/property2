@@ -14,6 +14,7 @@ const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
 
 import { simplifyFootprint, computeBufferCoords, type BuildingFootprint } from "@/components/PropertyMap";
 import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type PropertyTypeInfo } from "@/lib/property-type";
+import { PlanTypeIcon } from "@/components/PlanTypeIcon";
 
 type AnalysisStatus = {
   parcel_id: string;
@@ -233,6 +234,13 @@ export default function AnalysisPage() {
   const [activeTab, setActiveTab] = useState<TabId>("free-space");
   const [showNotice, setShowNotice] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [nearbySubdivisions, setNearbySubdivisions] = useState<{
+    within_2km: number;
+    within_5km: number;
+    within_10km: number;
+    within_20km: number;
+    within_50km: number;
+  } | null>(null);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -249,7 +257,7 @@ export default function AnalysisPage() {
 
   const freeSpace = useMemo(() => {
     if (status?.lot_area_sqm == null) return status?.available_space_sqm ?? null;
-    return status.lot_area_sqm - totalStructuresArea - (status.pool_area_sqm ?? 0);
+    return status.lot_area_sqm - totalStructuresArea - (Number(status.pool_area_sqm) || 0);
   }, [status?.lot_area_sqm, status?.available_space_sqm, status?.pool_area_sqm, totalStructuresArea]);
 
   // Property type classification — must be before any early returns (Rules of Hooks)
@@ -311,6 +319,20 @@ export default function AnalysisPage() {
       const stage = getStage(data);
       if (stage === "complete" || stage === "failed") {
         if (intervalRef.current) clearInterval(intervalRef.current);
+        if (stage === "complete") {
+          fetch(`/api/analysis/nearby-subdivisions?parcel_id=${encodeURIComponent(parcelId)}`)
+            .then((r) => r.json())
+            .then((d) =>
+              setNearbySubdivisions({
+                within_2km: Number(d.within_2km),
+                within_5km: Number(d.within_5km),
+                within_10km: Number(d.within_10km),
+                within_20km: Number(d.within_20km),
+                within_50km: Number(d.within_50km),
+              })
+            )
+            .catch(console.error);
+        }
       }
     } catch (err) {
       console.error("Poll error:", err);
@@ -532,19 +554,20 @@ export default function AnalysisPage() {
         <aside className="w-[380px] flex-shrink-0 border-l border-white/[0.06] bg-[#15151e] flex flex-col">
           <div className="flex-1 overflow-y-auto">
             <div className="p-5 space-y-5">
-              {/* Address + property type badge */}
-              <div>
-                <div className="flex items-center gap-2 mb-1">
-                  <h1 className="text-sm font-semibold text-white leading-tight flex-1 min-w-0 truncate">
+              {/* Address + property type icon */}
+              <div className="flex items-start gap-3">
+                <div className={`flex-shrink-0 w-10 h-10 rounded flex items-center justify-center border border-current/20 ${typeBadgeColor}`}>
+                  <PlanTypeIcon plan={status.cadastre_plan} className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-sm font-semibold text-white leading-tight truncate">
                     {status.display_address ?? `Lot ${status.cadastre_lot} on ${status.cadastre_plan}`}
                   </h1>
-                  <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${typeBadgeColor}`}>
-                    {typeInfo.label}
-                  </span>
+                  <p className="text-xs text-zinc-500 mt-0.5">{typeInfo.label}</p>
+                  {status.building_name && (
+                    <p className="text-xs text-zinc-500">{status.building_name}</p>
+                  )}
                 </div>
-                {status.building_name && (
-                  <p className="text-xs text-zinc-500">{status.building_name}</p>
-                )}
               </div>
 
               {/* View mode tabs */}
@@ -594,13 +617,28 @@ export default function AnalysisPage() {
                 </div>
               )}
 
-              {/* Big number — free space (only for types with subdivision) */}
+              {/* Big numbers — free space + covered */}
               {typeInfo.allowSubdivision && (
-                <div>
-                  <p className="text-4xl font-bold tracking-tight tabular-nums">
-                    {freeSpace != null ? Math.round(freeSpace).toLocaleString() : "—"}
-                    <span className="text-lg font-medium text-zinc-400 ml-0.5">m²</span>
-                  </p>
+                <div className="flex items-end gap-4">
+                  <div>
+                    <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Free</p>
+                    <p className="text-4xl font-bold tracking-tight tabular-nums leading-none">
+                      {freeSpace != null ? Math.round(freeSpace).toLocaleString() : "—"}
+                      <span className="text-lg font-medium text-zinc-400 ml-0.5">m²</span>
+                    </p>
+                  </div>
+                  {status?.lot_area_sqm != null && !isNaN(totalStructuresArea) && (
+                    <>
+                      <div className="w-px h-8 bg-white/10 mb-1 flex-shrink-0" />
+                      <div>
+                        <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
+                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
+                          {Math.round(totalStructuresArea + (Number(status.pool_area_sqm) || 0)).toLocaleString()}
+                          <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -729,53 +767,36 @@ export default function AnalysisPage() {
                 </SidebarSection>
               )}
 
-              {/* Subdivision Potential — only for house/multi_dwelling */}
-              {typeInfo.allowSubdivision && (
-                <SidebarSection
-                  title="Subdivision Potential"
-                  icon={
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path d="M16 3h5v5M14 10l7-7M8 21H3v-5M10 14l-7 7" />
-                    </svg>
-                  }
-                >
-                  <div className="px-3 py-2.5">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs text-zinc-500">Estimated new lots</span>
-                      <span className="text-sm font-semibold tabular-nums">
-                        {status.lot_area_sqm != null && freeSpace != null
-                          ? `~ ${Math.max(1, Math.floor(freeSpace / 400)).toFixed(1)} Lots`
-                          : "—"}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-zinc-600 leading-relaxed">
-                      Preliminary estimate based on available space and minimum lot requirements. Actual potential depends on local planning scheme overlays.
-                    </p>
-                  </div>
-                </SidebarSection>
-              )}
 
-              {/* Building Footprint — for house/multi_dwelling/townhouse */}
-              {propertyType !== "special_tenure" && (
+
+              {/* Nearby Subdivision Activity */}
+              {typeInfo.allowSubdivision && nearbySubdivisions && (
                 <SidebarSection
-                  title="Building Footprint"
+                  title="Nearby Subdivision Activity"
                   icon={
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path d="M3 21V7l9-4 9 4v14" />
-                      <path d="M9 21V13h6v8" />
+                      <circle cx="12" cy="12" r="3" />
+                      <circle cx="12" cy="12" r="7" strokeDasharray="3 2" />
+                      <circle cx="12" cy="12" r="11" strokeDasharray="3 2" />
                     </svg>
                   }
                 >
-                  <SidebarRow
-                    icon={<BuildingCountIcon />}
-                    label="Total Buildings"
-                    value={String(footprints.length)}
-                  />
-                  <SidebarRow
-                    icon={<AreaIcon />}
-                    label="Total Footprint"
-                    value={sqm(footprints.reduce((sum, f) => sum + f.area_sqm, 0))}
-                  />
+                  {(
+                    [
+                      { label: "Within 2 km", value: nearbySubdivisions.within_2km },
+                      { label: "Within 5 km", value: nearbySubdivisions.within_5km },
+                      { label: "Within 10 km", value: nearbySubdivisions.within_10km },
+                      { label: "Within 20 km", value: nearbySubdivisions.within_20km },
+                      { label: "Within 50 km", value: nearbySubdivisions.within_50km },
+                    ] as const
+                  ).map(({ label, value }) => (
+                    <SidebarRow
+                      key={label}
+                      icon={<ActivityIcon />}
+                      label={label}
+                      value={value.toLocaleString()}
+                    />
+                  ))}
                 </SidebarSection>
               )}
 
@@ -808,7 +829,7 @@ export default function AnalysisPage() {
           {typeInfo.allowSubdivision && (
             <div className="p-4 border-t border-white/[0.06]">
               <button className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold transition-colors">
-                Subdivide Land
+                Search Again
               </button>
             </div>
           )}
@@ -1010,6 +1031,15 @@ function AreaIcon() {
       <path d="M3 7v14h14" />
       <path d="M7 3v14h14" />
       <rect x="10" y="6" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+function ActivityIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="12" cy="12" r="2" />
+      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
     </svg>
   );
 }
