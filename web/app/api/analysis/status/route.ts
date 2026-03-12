@@ -44,6 +44,14 @@ export async function GET(req: NextRequest) {
       lga_name: string | null;
       zone_code: string | null;
       zone_name: string | null;
+      property_type: string | null;
+      plan_prefix: string | null;
+      address_count: number | null;
+      flat_types: string[] | null;
+      building_name: string | null;
+      complex_geometry_json: string | null;
+      complex_lot_count: number | null;
+      tenure_type: string | null;
     }>(
       `SELECT
          p.id               AS parcel_id,
@@ -54,6 +62,14 @@ export async function GET(req: NextRequest) {
          p.lga_name,
          p.zone_code,
          p.zone_name,
+         p.property_type,
+         p.plan_prefix,
+         p.address_count,
+         p.flat_types,
+         p.building_name,
+         ST_AsGeoJSON(p.complex_geometry) AS complex_geometry_json,
+         p.complex_lot_count,
+         p.tenure_type,
          pa.image_status,
          pa.analysis_status,
          pa.main_house_size_sqm,
@@ -81,7 +97,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Analysis not found" }, { status: 404 });
     }
 
-    return NextResponse.json(result.rows[0]);
+    const row = result.rows[0];
+
+    return NextResponse.json({
+      ...row,
+      complex_geometry: row.complex_geometry_json
+        ? JSON.parse(row.complex_geometry_json)
+        : null,
+      complex_geometry_json: undefined,
+    });
   } catch (err) {
     console.error("Status poll error:", err);
     return NextResponse.json({ error: "Failed to fetch status" }, { status: 500 });

@@ -142,11 +142,20 @@ app/
 
 ```
 1. User types address
-   └─ Google Places Autocomplete (AU only)
+   └─ Google Places Autocomplete (AU only) → formatted_address + lat/lon
 
-2. Address selected → GET /api/properties/lookup?lat=&lon=&address=
-   ├─ Cadastre lookup: lot, plan, area, boundary (PostGIS ST_Within)
-   ├─ LGA lookup: council name (PostGIS ST_Within on qld_lga_boundaries)
+2. Address selected → GET /api/properties/lookup?address=&lat=&lon=
+   ├─ Google Address Validation API (cached in address_validation_cache, 18-month TTL)
+   │   └─ Gates on possibleNextAction === "ACCEPT". Rejects non-QLD and ambiguous addresses.
+   │      Returns normalised components: streetNumber, route, locality, state, postalCode, geocode
+   ├─ Spatial cadastre lookup (qld_cadastre_parcels)
+   │   ├─ ST_Contains(geometry, point) → finds parcel at validated lat/lon
+   │   ├─ Fallback: ST_DWithin nearest parcel within ~50m
+   │   ├─ Address refinement: cross-check with qld_cadastre_address by street number
+   │   │   to resolve adjacent lots (e.g. 67 vs 67A duplex)
+   │   └─ If lot='0'/'00000' (common property) → ST_Union all lots on plan (building footprint)
+   ├─ Address enrichment (qld_cadastre_address) → address_count, flat_types, building_name
+   ├─ LGA lookup: council name (PostGIS ST_Within on gnaf_admin_lga)
    ├─ Zoning lookup: zone code/name (PostGIS ST_Intersects on qld_planning_zones)
    └─ Returns: parcel data + lga_name + zone_code + zone_name
 
@@ -211,6 +220,9 @@ Applied in order via `psql $DATABASE_URL -f db/migrations/NNN_*.sql`:
 | `010_admin_boundaries.sql` | Geoscape admin boundary tables (all states) |
 | `011_gnaf_full_dataset.sql` | Full GNAF dataset — 35 gnaf_data_* tables |
 | `012_drop_old_gnaf_tables.sql` | Drop partial gnaf_* tables superseded by gnaf_data_* |
+| `013_qld_cadastre_full.sql` | QLD cadastre full dataset additions |
+| `014_property_type.sql` | Property type classification columns |
+| `015_address_validation_cache.sql` | Cache table for Google Address Validation API responses (18-month TTL) |
 
 ### Immutable Tables (never modify, never add custom columns)
 
@@ -274,9 +286,9 @@ Key fields: `zone_code`, `zone_name`, `planning_scheme`, `lga`, `geometry` (Mult
 
 - All geometry in **SRID 7844** (GDA2020 Geographic) — the Australian standard. Never WGS84/4326.
 - All geometry columns require a PostGIS spatial index (`USING GIST`).
-- Address → parcel join: `ST_Within(ST_MakePoint(lon, lat), cadastre.geometry)`.
-- LGA lookup: `ST_Within(point, qld_lga_boundaries.geometry)`.
-- Zoning lookup: `ST_Intersects(point, qld_planning_zones.geometry)`.
+- Address → parcel join: spatial `ST_Contains` lookup using Google's validated geocode against `qld_cadastre_parcels`. Falls back to nearest parcel within 50m. Common property lots (lot=0/00000) trigger a plan-wide union for building footprints.
+- LGA lookup: `ST_Within(point, gnaf_admin_lga.geom)` using geocode from Address Validation API.
+- Zoning lookup: `ST_Intersects(point, qld_planning_zones.geometry)` using geocode from Address Validation API.
 - Building footprints stored in GDA94 (EPSG:4283) for Google Maps alignment.
 
 ---

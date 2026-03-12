@@ -34,6 +34,7 @@ declare global {
 
 type SelectedPlace = {
   displayAddress: string;
+  rawInput: string;
   lat: number;
   lon: number;
 };
@@ -62,6 +63,7 @@ export default function Home() {
       if (!place.geometry?.location) return;
       setSelectedPlace({
         displayAddress: place.formatted_address ?? "",
+        rawInput: inputRef.current?.value ?? place.formatted_address ?? "",
         lat: place.geometry.location.lat(),
         lon: place.geometry.location.lng(),
       });
@@ -84,7 +86,7 @@ export default function Home() {
     try {
       // 1. Resolve lat/lon → cadastre parcel
       const lookupRes = await fetch(
-        `/api/properties/lookup?lat=${selectedPlace.lat}&lon=${selectedPlace.lon}&address=${encodeURIComponent(selectedPlace.displayAddress)}`
+        `/api/properties/lookup?lat=${selectedPlace.lat}&lon=${selectedPlace.lon}&address=${encodeURIComponent(selectedPlace.rawInput)}`
       );
       if (!lookupRes.ok) {
         const data = await lookupRes.json();

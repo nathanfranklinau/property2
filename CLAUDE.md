@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Purpose
 
-**PropertyProfiler** (renamed from SubdivideGuide) is a property insights platform for Australian homeowners. A homeowner types their address, the app looks up their property from authoritative datasets, runs an automated analysis of the land and existing structures, and provides zoning, council, and subdivision intelligence.
+**PropertyProfiler** is a property insights platform for Australian homeowners. A homeowner types their address, the app looks up their property from authoritative datasets, runs an automated analysis of the land and existing structures, and provides zoning, council, and subdivision intelligence.
 
 **Two audiences:** homeowners (single property analysis, Phase 1) and professionals (multi-property tracking, Phase 2).
 
@@ -22,13 +22,13 @@ Browser → Next.js (web/)           localhost:3000
           PostgreSQL + PostGIS      localhost:5432
 ```
 
-- **`data-layer/`** — Python 3.11. Import scripts (run manually to load datasets) + FastAPI analysis microservice (runs alongside Next.js).
-- **`web/`** — Next.js 16 App Router. Handles both frontend UI, API routes, and blog (MDX). Uses `pg` (node-postgres) directly — no ORM.
+- **`data-layer/`** — Python 3.11. Import scripts (run manually to load datasets) + FastAPI analysis microservice.
+- **`web/`** — Next.js 16 App Router. Frontend UI, API routes, and blog (MDX). Uses `pg` (node-postgres) directly — no ORM.
 - **`db/migrations/`** — SQL files applied manually in order.
 
 ### On-demand analysis with caching
 
-Analysis is triggered from the UI when a user searches an address. Results are cached by cadastre parcel (`lot + plan`) — if two users look up the same property, the second gets the cached result instantly. The cache lives in the `property_analysis` table.
+Analysis is triggered from the UI when a user searches an address. Results are cached by cadastre parcel (`lot + plan`). The cache lives in the `property_analysis` table.
 
 Full flow: [docs/architecture.md](docs/architecture.md)
 
@@ -56,7 +56,6 @@ cd web
 npm install
 npm run dev           # development server
 npm run build         # production build
-npm run start         # serve production build
 npm run type-check    # TypeScript check without building
 ```
 
@@ -71,62 +70,28 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Import datasets (run once, or when datasets are refreshed)
-python import/import_gnaf_full.py --data-dir <path>   # Full GNAF (all 35 tables, all states)
+python import/import_gnaf_full.py --data-dir <path>
 python import/import_qld_cadastre.py --gdb <path>
 python import/import_qld_pools.py --csv <path>
 python import/import_qld_lga.py --src <path>
 python import/import_qld_zones.py --src <path>
 python import/import_admin_boundaries.py --src <path>
-
-# Analysis service
-uvicorn service.main:app --port 8001 --reload
 ```
 
 ### Database migrations
 
-Run SQL files in order against your local database:
+Run SQL files in order — see [db/migrations/](db/migrations/) for the full list:
 
 ```bash
 psql $DATABASE_URL -f db/migrations/001_immutable_datasets.sql
-psql $DATABASE_URL -f db/migrations/002_application_tables.sql
-psql $DATABASE_URL -f db/migrations/003_add_image_paths.sql
-psql $DATABASE_URL -f db/migrations/004_street_view.sql
-psql $DATABASE_URL -f db/migrations/005_styled_map.sql
-psql $DATABASE_URL -f db/migrations/006_building_footprints_geo.sql
-psql $DATABASE_URL -f db/migrations/007_qld_lga.sql
-psql $DATABASE_URL -f db/migrations/008_parcels_lga_zone.sql
-psql $DATABASE_URL -f db/migrations/009_qld_zones.sql
-psql $DATABASE_URL -f db/migrations/010_admin_boundaries.sql
-psql $DATABASE_URL -f db/migrations/011_gnaf_full_dataset.sql
-psql $DATABASE_URL -f db/migrations/012_drop_old_gnaf_tables.sql
+# ... through to the latest migration
 ```
 
 ---
 
 ## Environment Variables
 
-### `data-layer/.env`
-
-```
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=subdivide
-POSTGRES_USER=
-POSTGRES_PASSWORD=
-GOOGLE_MAPS_API_KEY=
-IMAGES_DIR=./images
-YOLO_MODEL_PATH=./yolov8s.pt
-```
-
-### `web/.env.local`
-
-```
-DATABASE_URL=postgresql://user:password@localhost:5432/subdivide
-ANALYSIS_SERVICE_URL=http://localhost:8001
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=
-NEXTAUTH_SECRET=
-NEXTAUTH_URL=http://localhost:3000
-```
+See [data-layer/.env](data-layer/.env) and [web/.env.local](web/.env.local) for the required variables. Templates for both are in [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -144,20 +109,15 @@ NEXTAUTH_URL=http://localhost:3000
 | File | Purpose |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | Full system architecture |
-| [docs/subdivision-process.md](docs/subdivision-process.md) | QLD subdivision steps (source for journey_steps seed data) |
-| [db/migrations/001_immutable_datasets.sql](db/migrations/001_immutable_datasets.sql) | GNAF (partial), Cadastre, Pools table schemas |
-| [db/migrations/011_gnaf_full_dataset.sql](db/migrations/011_gnaf_full_dataset.sql) | Full GNAF dataset (35 tables, gnaf_data_* prefix) |
-| [db/migrations/002_application_tables.sql](db/migrations/002_application_tables.sql) | App table schemas (parcels, property_analysis, …) |
+| [db/migrations/](db/migrations/) | All schema migrations (apply in order) |
 | `data-layer/service/main.py` | FastAPI entry point |
 | `data-layer/service/analyser.py` | Analysis pipeline orchestrator |
 | `web/lib/db.ts` | pg connection pool |
-| `web/lib/blog.ts` | MDX blog post reader |
+| `web/lib/address-validation.ts` | Google Address Validation API — cache-backed lookup |
 | `web/lib/zone-rules.ts` | Static QLD zone rules lookup |
+| `web/app/api/properties/lookup/route.ts` | GET — address validation → spatial cadastre → enrichment |
 | `web/app/api/analysis/request/route.ts` | POST — trigger or return cached analysis |
 | `web/app/api/analysis/status/route.ts` | GET — poll for analysis progress |
-| `web/app/(public)/page.tsx` | Home page (address search) |
-| `web/app/(public)/blog/page.tsx` | Blog index |
-| `web/app/(public)/blog/[slug]/page.tsx` | Blog post page (SSG) |
 | `web/content/blog/*.mdx` | Blog post content (MDX with frontmatter) |
 
 ---
@@ -175,12 +135,51 @@ python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')"
 
 ## Project Phases
 
-- **Phase 1 (current):** Public prototype — address search, property analysis, LGA/zoning lookup, blog. No auth required. Unauthenticated proof of concept for market validation.
-- **Phase 2:** Auth + paywall — login, save properties/markups, multi-property tracking, subdivision journey, step tracking.
+- **Phase 1 (current):** Public prototype — address search, property analysis, LGA/zoning lookup, blog. No auth required.
+- **Phase 2:** Auth + paywall — login, save properties/markups, multi-property tracking, subdivision journey tracking.
 - **Phase 3:** Multi-state — NSW, VIC support. Schema already includes `state`/`jurisdiction` columns.
 
 ---
 
-## Migration Notes
+# Simplicity & Anti-Overengineering Rules
 
-This is a rewrite of `../realestateopportunities`. The Python analysis pipeline (building detection, pool detection, image retrieval) is carried across and moved into `data-layer/service/`. The investor-focused scoring, two-database architecture, and promotion pipeline are not migrated. The old import scripts are rewritten without Docker workarounds (they were 900–1200 lines; new versions are ~200 lines each).
+## Core Principle
+- Solve the problem at hand. Do not solve problems that don't exist yet.
+
+## Solution Design
+- Prefer the simplest solution that satisfies the requirements
+- Do NOT add abstractions, layers, or patterns unless they are needed RIGHT NOW
+- Do NOT anticipate future requirements — build for today, refactor when the future arrives
+- If a function, a variable, or a plain object works, do not reach for a class
+- Avoid design patterns unless the problem clearly calls for one
+- Avoid creating new files, modules, or directories unless the code genuinely warrants it
+
+## Code Style
+- Short, readable functions over long "flexible" ones
+- Inline logic is fine for simple cases — avoid premature extraction
+- Duplication is acceptable; over-abstraction is worse than mild repetition
+- Prefer explicit code over clever code
+
+## Dependencies & Infrastructure
+- Do NOT introduce new libraries or tools without asking first
+- Do NOT add configuration systems, plugin architectures, or dynamic loaders unless explicitly requested
+- Avoid wrapping native APIs or built-in language features unnecessarily
+
+## When Asked to Improve or Refactor
+- Fix what is broken or asked for — do not refactor unrelated code
+- Do NOT expand scope beyond the stated task
+- If you see an opportunity to simplify, mention it — but do not act on it uninstructed
+
+## Check Yourself Before Responding
+- Ask: "Is this the simplest thing that works?"
+- Ask: "Am I adding this because it's needed, or because it seems like good practice?"
+- If the answer to the second question is yes → remove it
+
+## Fallbacks & Mock Data
+- NEVER use fallback values, default data, or mock/stub data unless explicitly told to
+- NEVER implement fallback logic or error-recovery paths unless explicitly asked — if something fails, let it fail visibly
+- If real data is unavailable, missing, or failing — STOP and tell the user; do not substitute silently
+- Do NOT hardcode placeholder values, example responses, or dummy content as a workaround
+- Do NOT add "temporary" fallbacks with the intention of replacing them later
+- If an API, service, or data source fails — surface the real error; do not mask it with a default
+- When a function would return nothing, return nothing (null/empty/error) — do not invent a value

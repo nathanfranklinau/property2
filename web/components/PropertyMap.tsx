@@ -11,6 +11,31 @@ export type BuildingFootprint = {
   hasBuffer?: boolean;
 };
 
+export type Encumbrance = {
+  lotplan: string | null;
+  parcel_typ: string;
+  tenure: string | null;
+  label: string;
+  area_sqm: number;
+  coords: [number, number][][]; // array of rings, each [[lat, lon], ...]
+};
+
+/** Colour palette for each encumbrance type shown on the map. */
+export const ENCUMBRANCE_COLOURS: Record<string, { fill: string; stroke: string }> = {
+  Easement:          { fill: "#F59E0B", stroke: "#D97706" },
+  Road:              { fill: "#EF4444", stroke: "#DC2626" },
+  Watercourse:       { fill: "#3B82F6", stroke: "#2563EB" },
+  "Transport Route": { fill: "#EC4899", stroke: "#DB2777" },
+  Covenant:          { fill: "#8B5CF6", stroke: "#7C3AED" },
+  "Profit à Prendre":{ fill: "#10B981", stroke: "#059669" },
+};
+
+const DEFAULT_ENCUMBRANCE_COLOUR = { fill: "#94A3B8", stroke: "#64748B" };
+
+function encumbranceColour(label: string) {
+  return ENCUMBRANCE_COLOURS[label] ?? DEFAULT_ENCUMBRANCE_COLOUR;
+}
+
 type DrawMode = "edit" | "draw-polygon" | "draw-rectangle";
 
 type PropertyMapProps = {
@@ -19,6 +44,12 @@ type PropertyMapProps = {
   centroid: { lat: number; lng: number };
   footprints: BuildingFootprint[];
   onFootprintsChange: (footprints: BuildingFootprint[]) => void;
+  encumbrances?: Encumbrance[];
+  visibleEncumbranceTypes?: Set<string>;
+  /** When true, hides toolbar and disables all drawing/editing interaction. */
+  readOnly?: boolean;
+  /** Complex boundary for BUP/GTP — rendered as dashed outline behind the lot boundary. */
+  complexBoundary?: [number, number][][]; // array of rings [[lat, lon], ...]
 };
 
 type LatLng = google.maps.LatLngLiteral;
@@ -32,24 +63,27 @@ const ROTATE_STEP = 15;
 
 // ─── Geometry helpers ───────────────────────────────────────────────────────
 
-function getBounds(coords: [number, number][], padding = 0.0003) {
-  let minLat = Infinity,
-    maxLat = -Infinity,
-    minLng = Infinity,
-    maxLng = -Infinity;
+/** Compute the Google Maps zoom level that fits a lat/lng span into a pixel size.
+ *  mapWidth/mapHeight are the map container dimensions in pixels.
+ *  Uses 256px tile size and Mercator projection for latitude. */
+function boundsToZoom(coords: [number, number][], mapWidth = 600, mapHeight = 450): number {
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
   for (const [lat, lng] of coords) {
     if (lat < minLat) minLat = lat;
     if (lat > maxLat) maxLat = lat;
     if (lng < minLng) minLng = lng;
     if (lng > maxLng) maxLng = lng;
   }
-  return {
-    north: maxLat + padding,
-    south: minLat - padding,
-    east: maxLng + padding,
-    west: minLng - padding,
+  const TILE = 256;
+  const latFrac = (lat: number) => {
+    const sin = Math.sin((lat * Math.PI) / 180);
+    return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI));
   };
+  const lngZoom = Math.log2((mapWidth / TILE) * (360 / (maxLng - minLng || 0.0001)));
+  const latZoom = Math.log2((mapHeight / TILE) / Math.abs(latFrac(minLat) - latFrac(maxLat) || 0.0001));
+  return Math.floor(Math.min(lngZoom, latZoom)) - 1; // -1 adds a small padding margin
 }
+
 
 function pointInPolygon(point: LatLng, polygon: LatLng[]): boolean {
   let inside = false;
@@ -326,6 +360,21 @@ function edgeLengthM(a: LatLng, b: LatLng): number {
   const dy = (b.lat - a.lat) * mPerLat;
   const dx = (b.lng - a.lng) * mPerLng;
   return Math.sqrt(dx * dx + dy * dy);
+}
+
+/** Build a Google Maps icon for an encumbrance label (e.g. "Easement"). */
+function makeLabelIcon(text: string, colour: string): google.maps.Icon {
+  const pillW = Math.ceil(text.length * 6.5 + 16);
+  const pillH = 18;
+  const S = pillW + 4;
+  const cx = S / 2;
+  const cy = pillH / 2 + 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${pillH + 4}"><rect x="2" y="2" width="${pillW}" height="${pillH}" rx="${pillH / 2}" fill="${colour}" fill-opacity="0.85"/><text x="${cx}" y="${cy + 4.5}" font-family="-apple-system,BlinkMacSystemFont,Helvetica,sans-serif" font-size="10" font-weight="700" letter-spacing="0.02em" fill="white" text-anchor="middle">${text}</text></svg>`;
+  return {
+    url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+    scaledSize: new google.maps.Size(S, pillH + 4),
+    anchor: new google.maps.Point(cx, cy),
+  };
 }
 
 /** Build a Google Maps icon for a measurement label rotated to align with an edge. */
@@ -672,10 +721,18 @@ function MapInterior({
   boundaryCoords,
   footprints,
   onFootprintsChange,
+  encumbrances = [],
+  visibleEncumbranceTypes,
+  readOnly = false,
+  complexBoundary,
 }: {
   boundaryCoords: [number, number][];
   footprints: BuildingFootprint[];
   onFootprintsChange: (f: BuildingFootprint[]) => void;
+  encumbrances?: Encumbrance[];
+  visibleEncumbranceTypes?: Set<string>;
+  readOnly?: boolean;
+  complexBoundary?: [number, number][][];
 }) {
   const map = useMap();
 
@@ -700,6 +757,8 @@ function MapInterior({
   const vertexMarkersRef = useRef<google.maps.Marker[]>([]);
   const mapClickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const mapDblClickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
+  const encumbrancePolysRef = useRef<google.maps.Polygon[]>([]);
+  const encumbranceLabelMarkersRef = useRef<google.maps.Marker[]>([]);
 
   const boundaryPath = useMemo(
     () => boundaryCoords.map(([lat, lng]) => ({ lat, lng })),
@@ -898,6 +957,36 @@ function MapInterior({
     };
   }, [map, boundaryPath]);
 
+  // ── Render complex boundary (BUP/GTP) ─────────────────────────────────
+  const complexBoundaryRef = useRef<google.maps.Polygon[]>([]);
+  useEffect(() => {
+    complexBoundaryRef.current.forEach((p) => p.setMap(null));
+    complexBoundaryRef.current = [];
+    if (!map || !complexBoundary || complexBoundary.length === 0) return;
+
+    for (const ring of complexBoundary) {
+      const path = ring.map(([lat, lng]) => ({ lat, lng }));
+      const poly = new google.maps.Polygon({
+        paths: path,
+        fillColor: "transparent",
+        fillOpacity: 0,
+        strokeColor: "#ffffff",
+        strokeWeight: 1.5,
+        strokeOpacity: 0.4,
+        clickable: false,
+        zIndex: 0,
+      });
+      poly.setMap(map);
+      // Dashed stroke via icons on a polyline overlay
+      complexBoundaryRef.current.push(poly);
+    }
+
+    return () => {
+      complexBoundaryRef.current.forEach((p) => p.setMap(null));
+      complexBoundaryRef.current = [];
+    };
+  }, [map, complexBoundary]);
+
   // ── Render building polygons ─────────────────────────────────────────────
   useEffect(() => {
     if (!map) return;
@@ -1046,6 +1135,61 @@ function MapInterior({
       bufferPolysRef.current = [];
     };
   }, [map, footprints, boundaryCoords, boundaryPath]);
+
+  // ── Encumbrance overlays (easements, roads, watercourses, covenants…) ───────
+  useEffect(() => {
+    if (!map) return;
+
+    for (const p of encumbrancePolysRef.current) p.setMap(null);
+    for (const m of encumbranceLabelMarkersRef.current) m.setMap(null);
+    encumbrancePolysRef.current = [];
+    encumbranceLabelMarkersRef.current = [];
+
+    const visible = encumbrances.filter(
+      (e) => !visibleEncumbranceTypes || visibleEncumbranceTypes.has(e.label)
+    );
+
+    for (const enc of visible) {
+      const { fill, stroke } = encumbranceColour(enc.label);
+
+      for (const ring of enc.coords) {
+        if (ring.length < 3) continue;
+        const path = ring.map(([lat, lng]) => ({ lat, lng }));
+
+        const poly = new google.maps.Polygon({
+          paths: path,
+          fillColor: fill,
+          fillOpacity: 0.35,
+          strokeColor: stroke,
+          strokeWeight: 2,
+          strokeOpacity: 0.8,
+          clickable: false,
+          zIndex: 3,
+          map,
+        });
+        encumbrancePolysRef.current.push(poly);
+
+        // Label at centroid of ring
+        const centroid = polygonCentroid(path);
+        const labelSvg = makeLabelIcon(enc.label, fill);
+        const marker = new google.maps.Marker({
+          position: centroid,
+          icon: labelSvg,
+          clickable: false,
+          zIndex: 4,
+          map,
+        });
+        encumbranceLabelMarkersRef.current.push(marker);
+      }
+    }
+
+    return () => {
+      for (const p of encumbrancePolysRef.current) p.setMap(null);
+      for (const m of encumbranceLabelMarkersRef.current) m.setMap(null);
+      encumbrancePolysRef.current = [];
+      encumbranceLabelMarkersRef.current = [];
+    };
+  }, [map, encumbrances, visibleEncumbranceTypes]);
 
   // ── Edge measurement labels ───────────────────────────────────────────────
   useEffect(() => {
@@ -1323,6 +1467,8 @@ function MapInterior({
     }
   }, [map, mode]);
 
+  if (readOnly) return null;
+
   return (
     <MapToolbar
       mode={mode}
@@ -1351,27 +1497,22 @@ export default function PropertyMap({
   centroid,
   footprints,
   onFootprintsChange,
+  readOnly,
+  complexBoundary,
 }: PropertyMapProps) {
-  const restriction = useMemo(
-    () => getBounds(boundaryCoords, 0.001),
-    [boundaryCoords]
-  );
+  const defaultZoom = useMemo(() => boundsToZoom(boundaryCoords), [boundaryCoords]);
 
   return (
     <APIProvider apiKey={apiKey}>
       <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden border border-zinc-200">
         <Map
           defaultCenter={centroid}
-          defaultZoom={20}
+          defaultZoom={defaultZoom}
           mapTypeId="satellite"
           disableDefaultUI={true}
           zoomControl={true}
-          minZoom={18}
+          minZoom={10}
           maxZoom={22}
-          restriction={{
-            latLngBounds: restriction,
-            strictBounds: true,
-          }}
           gestureHandling="greedy"
           tilt={0}
         >
@@ -1379,6 +1520,8 @@ export default function PropertyMap({
             boundaryCoords={boundaryCoords}
             footprints={footprints}
             onFootprintsChange={onFootprintsChange}
+            readOnly={readOnly}
+            complexBoundary={complexBoundary}
           />
         </Map>
       </div>

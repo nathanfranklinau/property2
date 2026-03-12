@@ -13,6 +13,7 @@ const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
 });
 
 import { simplifyFootprint, computeBufferCoords, type BuildingFootprint } from "@/components/PropertyMap";
+import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type PropertyTypeInfo } from "@/lib/property-type";
 
 type AnalysisStatus = {
   parcel_id: string;
@@ -40,6 +41,15 @@ type AnalysisStatus = {
   lga_name: string | null;
   zone_code: string | null;
   zone_name: string | null;
+  // Property type fields
+  property_type: PropertyType | null;
+  plan_prefix: string | null;
+  address_count: number | null;
+  flat_types: string[] | null;
+  building_name: string | null;
+  complex_geometry: object | null;
+  complex_lot_count: number | null;
+  tenure_type: string | null;
 };
 
 type Stage = "queuing" | "imagery" | "analysing" | "complete" | "failed";
@@ -241,6 +251,42 @@ export default function AnalysisPage() {
     if (status?.lot_area_sqm == null) return status?.available_space_sqm ?? null;
     return status.lot_area_sqm - totalStructuresArea - (status.pool_area_sqm ?? 0);
   }, [status?.lot_area_sqm, status?.available_space_sqm, status?.pool_area_sqm, totalStructuresArea]);
+
+  // Property type classification — must be before any early returns (Rules of Hooks)
+  const typeInfo: PropertyTypeInfo = useMemo(
+    () => classifyProperty(status?.plan_prefix ?? null, status?.address_count ?? 0),
+    [status?.plan_prefix, status?.address_count]
+  );
+  const propertyType = status?.property_type ?? typeInfo.type;
+  const typeBadgeColor = PROPERTY_TYPE_COLORS[propertyType] ?? PROPERTY_TYPE_COLORS.house;
+
+  const visibleTabs = useMemo(() => {
+    switch (propertyType) {
+      case "unit":
+        return TABS.filter((t) => t.id === "boundaries" || t.id === "buildings");
+      case "townhouse":
+        return TABS.filter((t) => t.id === "boundaries" || t.id === "buildings" || t.id === "easements");
+      case "special_tenure":
+        return TABS.filter((t) => t.id === "boundaries");
+      default:
+        return TABS;
+    }
+  }, [propertyType]);
+
+  const complexBoundaryRings = useMemo((): [number, number][][] | undefined => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const geo = status?.complex_geometry as any;
+    if (!geo?.coordinates) return undefined;
+    if (geo.type === "MultiPolygon") {
+      return (geo.coordinates as number[][][][]).map((poly) =>
+        poly[0].map(([lon, lat]) => [lat, lon] as [number, number])
+      );
+    }
+    if (geo.type === "Polygon") {
+      return [(geo.coordinates as number[][][])[0].map(([lon, lat]) => [lat, lon] as [number, number])];
+    }
+    return undefined;
+  }, [status?.complex_geometry]);
 
   async function poll() {
     try {
@@ -451,13 +497,15 @@ export default function AnalysisPage() {
                   }}
                   footprints={footprints}
                   onFootprintsChange={setFootprints}
+                  readOnly={!typeInfo.allowDrawingTools}
+                  complexBoundary={complexBoundaryRings}
                 />
               )}
           </div>
 
           {/* Tab bar */}
           <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-white/[0.06] bg-[#111118] overflow-x-auto">
-            {TABS.map((tab) => (
+            {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -484,26 +532,30 @@ export default function AnalysisPage() {
         <aside className="w-[380px] flex-shrink-0 border-l border-white/[0.06] bg-[#15151e] flex flex-col">
           <div className="flex-1 overflow-y-auto">
             <div className="p-5 space-y-5">
-              {/* Address */}
+              {/* Address + property type badge */}
               <div>
-                <h1 className="text-sm font-semibold text-white leading-tight">
-                  {status.display_address ?? `Lot ${status.cadastre_lot} on ${status.cadastre_plan}`}
-                </h1>
+                <div className="flex items-center gap-2 mb-1">
+                  <h1 className="text-sm font-semibold text-white leading-tight flex-1 min-w-0 truncate">
+                    {status.display_address ?? `Lot ${status.cadastre_lot} on ${status.cadastre_plan}`}
+                  </h1>
+                  <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${typeBadgeColor}`}>
+                    {typeInfo.label}
+                  </span>
+                </div>
+                {status.building_name && (
+                  <p className="text-xs text-zinc-500">{status.building_name}</p>
+                )}
               </div>
 
               {/* View mode tabs */}
               <div className="flex items-center gap-2">
-                <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.08] text-xs font-medium text-white">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white">
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <circle cx="12" cy="12" r="3" />
                     <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
                   </svg>
                   Free Space
-                </button>
-                <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] transition-colors">
-                  Re: Exterior Analysis
-                </button>
-                <span className="ml-auto text-[10px] text-zinc-600 font-medium">Summit Space</span>
+                </div>
               </div>
 
               {/* Zone badge */}
@@ -518,24 +570,45 @@ export default function AnalysisPage() {
                 </div>
               )}
 
-              {/* Big number — free space */}
-              <div className="flex items-end justify-between">
+              {/* Special tenure banner */}
+              {propertyType === "special_tenure" && (
+                <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2.5">
+                  <p className="text-xs font-semibold text-amber-400">{typeInfo.label}</p>
+                  <p className="text-[11px] text-amber-400/70 mt-0.5">
+                    This land is not standard freehold and has special tenure restrictions.
+                  </p>
+                </div>
+              )}
+
+              {/* Multi-dwelling banner */}
+              {propertyType === "multi_dwelling" && (
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2.5">
+                  <p className="text-xs font-semibold text-blue-400">
+                    {status.address_count ?? 0} addresses on this lot
+                  </p>
+                  {status.flat_types && status.flat_types.length > 0 && (
+                    <p className="text-[11px] text-blue-400/70 mt-0.5">
+                      Types: {status.flat_types.join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Big number — free space (only for types with subdivision) */}
+              {typeInfo.allowSubdivision && (
                 <div>
                   <p className="text-4xl font-bold tracking-tight tabular-nums">
                     {freeSpace != null ? Math.round(freeSpace).toLocaleString() : "—"}
                     <span className="text-lg font-medium text-zinc-400 ml-0.5">m²</span>
                   </p>
                 </div>
-                <button className="px-3 py-1.5 rounded-lg border border-white/10 text-xs font-medium text-zinc-400 hover:text-white hover:border-white/20 transition-colors">
-                  Scenario
-                </button>
-              </div>
+              )}
 
               {/* Dismissible notice */}
               {showNotice && (
                 <div className="flex items-start gap-2 rounded-lg bg-white/[0.04] border border-white/[0.06] px-3 py-2.5">
                   <p className="text-[11px] text-zinc-400 leading-relaxed flex-1">
-                    Results are AI-assisted estimates based on satellite imagery and public data — verify with your local council before proceeding.
+                    Results are estimates based on satellite imagery and public data — verify with your local council before proceeding.
                   </p>
                   <button
                     onClick={() => setShowNotice(false)}
@@ -546,6 +619,47 @@ export default function AnalysisPage() {
                     </svg>
                   </button>
                 </div>
+              )}
+
+              {/* Complex Info (BUP / GTP only) */}
+              {(propertyType === "unit" || propertyType === "townhouse") && (
+                <SidebarSection
+                  title="Complex Info"
+                  icon={
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <rect x="3" y="8" width="8" height="13" rx="1" />
+                      <rect x="13" y="3" width="8" height="18" rx="1" />
+                      <path d="M6 12h2M6 15h2M16 7h2M16 10h2M16 13h2" />
+                    </svg>
+                  }
+                >
+                  {status.building_name && (
+                    <SidebarRow
+                      icon={<BuildingCountIcon />}
+                      label="Complex Name"
+                      value={status.building_name}
+                    />
+                  )}
+                  <SidebarRow
+                    icon={<PlanIcon />}
+                    label="Plan"
+                    value={status.cadastre_plan}
+                  />
+                  {status.complex_lot_count != null && status.complex_lot_count > 0 && (
+                    <SidebarRow
+                      icon={<LotIcon />}
+                      label={propertyType === "unit" ? "Units in Complex" : "Lots in Complex"}
+                      value={String(status.complex_lot_count)}
+                    />
+                  )}
+                  {status.address_count != null && status.address_count > 0 && (
+                    <SidebarRow
+                      icon={<AreaIcon />}
+                      label="Addresses"
+                      value={String(status.address_count)}
+                    />
+                  )}
+                </SidebarSection>
               )}
 
               {/* Property Rights */}
@@ -574,83 +688,96 @@ export default function AnalysisPage() {
                   value={status.lga_name ?? "—"}
                   valueColor={status.lga_name ? undefined : "text-zinc-500"}
                 />
-              </SidebarSection>
-
-              {/* Self-Planning Stats */}
-              <SidebarSection
-                title="Space Analysis"
-                icon={
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <path d="M21 12a9 9 0 11-9-9" />
-                    <path d="M21 3v6h-6" />
-                  </svg>
-                }
-              >
-                <SidebarRow
-                  icon={<FreeSpaceIcon />}
-                  label="Free Space"
-                  value={sqm(freeSpace)}
-                  highlight
-                />
-                <SidebarRow
-                  icon={<StructuresIcon />}
-                  label="Total Structures"
-                  value={sqm(totalStructuresArea)}
-                />
-                {status.pool_area_sqm != null && status.pool_area_sqm > 0 && (
+                {propertyType === "special_tenure" && (
                   <SidebarRow
-                    icon={<PoolIcon />}
-                    label="Pool Area"
-                    value={sqm(status.pool_area_sqm)}
+                    icon={<ZoneIcon />}
+                    label="Tenure"
+                    value={typeInfo.label}
                   />
                 )}
               </SidebarSection>
 
-              {/* Subdivision Potential */}
-              <SidebarSection
-                title="Subdivision Potential"
-                icon={
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <path d="M16 3h5v5M14 10l7-7M8 21H3v-5M10 14l-7 7" />
-                  </svg>
-                }
-              >
-                <div className="px-3 py-2.5">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-zinc-500">Estimated new lots</span>
-                    <span className="text-sm font-semibold tabular-nums">
-                      {status.lot_area_sqm != null && freeSpace != null
-                        ? `~ ${Math.max(1, Math.floor(freeSpace / 400)).toFixed(1)} Lots`
-                        : "—"}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-600 leading-relaxed">
-                    Preliminary estimate based on available space and minimum lot requirements. Actual potential depends on local planning scheme overlays.
-                  </p>
-                </div>
-              </SidebarSection>
+              {/* Space Analysis — only for house/multi_dwelling */}
+              {(propertyType === "house" || propertyType === "multi_dwelling") && (
+                <SidebarSection
+                  title="Space Analysis"
+                  icon={
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M21 12a9 9 0 11-9-9" />
+                      <path d="M21 3v6h-6" />
+                    </svg>
+                  }
+                >
+                  <SidebarRow
+                    icon={<FreeSpaceIcon />}
+                    label="Free Space"
+                    value={sqm(freeSpace)}
+                    highlight
+                  />
+                  <SidebarRow
+                    icon={<StructuresIcon />}
+                    label="Total Structures"
+                    value={sqm(totalStructuresArea)}
+                  />
+                  {status.pool_area_sqm != null && status.pool_area_sqm > 0 && (
+                    <SidebarRow
+                      icon={<PoolIcon />}
+                      label="Pool Area"
+                      value={sqm(status.pool_area_sqm)}
+                    />
+                  )}
+                </SidebarSection>
+              )}
 
-              {/* Building Footprint */}
-              <SidebarSection
-                title="Building Footprint"
-                icon={
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <path d="M3 21V7l9-4 9 4v14" />
-                    <path d="M9 21V13h6v8" />
-                  </svg>
-                }
-              >
-                <SidebarRow
-                  icon={<BuildingCountIcon />}
-                  label="Total Buildings"
-                  value={String(footprints.length)}
-                />
-                <SidebarRow
-                  icon={<AreaIcon />}
-                  label="Total Footprint"
-                  value={sqm(footprints.reduce((sum, f) => sum + f.area_sqm, 0))}
-                />
-              </SidebarSection>
+              {/* Subdivision Potential — only for house/multi_dwelling */}
+              {typeInfo.allowSubdivision && (
+                <SidebarSection
+                  title="Subdivision Potential"
+                  icon={
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M16 3h5v5M14 10l7-7M8 21H3v-5M10 14l-7 7" />
+                    </svg>
+                  }
+                >
+                  <div className="px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs text-zinc-500">Estimated new lots</span>
+                      <span className="text-sm font-semibold tabular-nums">
+                        {status.lot_area_sqm != null && freeSpace != null
+                          ? `~ ${Math.max(1, Math.floor(freeSpace / 400)).toFixed(1)} Lots`
+                          : "—"}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-zinc-600 leading-relaxed">
+                      Preliminary estimate based on available space and minimum lot requirements. Actual potential depends on local planning scheme overlays.
+                    </p>
+                  </div>
+                </SidebarSection>
+              )}
+
+              {/* Building Footprint — for house/multi_dwelling/townhouse */}
+              {propertyType !== "special_tenure" && (
+                <SidebarSection
+                  title="Building Footprint"
+                  icon={
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M3 21V7l9-4 9 4v14" />
+                      <path d="M9 21V13h6v8" />
+                    </svg>
+                  }
+                >
+                  <SidebarRow
+                    icon={<BuildingCountIcon />}
+                    label="Total Buildings"
+                    value={String(footprints.length)}
+                  />
+                  <SidebarRow
+                    icon={<AreaIcon />}
+                    label="Total Footprint"
+                    value={sqm(footprints.reduce((sum, f) => sum + f.area_sqm, 0))}
+                  />
+                </SidebarSection>
+              )}
 
               {/* Zoning */}
               <SidebarSection
@@ -678,11 +805,13 @@ export default function AnalysisPage() {
           </div>
 
           {/* CTA */}
-          <div className="p-4 border-t border-white/[0.06]">
-            <button className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold transition-colors">
-              Subdivide Land
-            </button>
-          </div>
+          {typeInfo.allowSubdivision && (
+            <div className="p-4 border-t border-white/[0.06]">
+              <button className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white text-sm font-semibold transition-colors">
+                Subdivide Land
+              </button>
+            </div>
+          )}
         </aside>
       </div>
     </div>

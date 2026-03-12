@@ -10,16 +10,10 @@
  *
  * Body:
  *   {
- *     lot:            string   // from cadastre
- *     plan:           string
- *     lot_area_sqm:   number
- *     display_address: string
- *     lat:            number   // centroid of the parcel
- *     lon:            number
- *     geometry:       GeoJSON  // parcel boundary (for display)
- *     lga_name:       string | null  // council name from spatial join
- *     zone_code:      string | null  // planning zone code
- *     zone_name:      string | null  // planning zone name
+ *     lot, plan, lot_area_sqm, display_address, lat, lon, geometry,
+ *     lga_name, zone_code, zone_name,
+ *     property_type, plan_prefix, address_count, flat_types, building_name,
+ *     complex_geometry, complex_lot_count, tenure_type
  *   }
  *
  * Returns:
@@ -45,6 +39,14 @@ export async function POST(req: NextRequest) {
     lga_name: string | null;
     zone_code: string | null;
     zone_name: string | null;
+    property_type: string | null;
+    plan_prefix: string | null;
+    address_count: number | null;
+    flat_types: string[] | null;
+    building_name: string | null;
+    complex_geometry: object | null;
+    complex_lot_count: number | null;
+    tenure_type: string | null;
   };
 
   try {
@@ -53,7 +55,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { lot, plan, lot_area_sqm, display_address, lat, lon, geometry, lga_name, zone_code, zone_name } = body;
+  const {
+    lot, plan, lot_area_sqm, display_address, lat, lon, geometry,
+    lga_name, zone_code, zone_name,
+    property_type, plan_prefix, address_count, flat_types, building_name,
+    complex_geometry, complex_lot_count, tenure_type,
+  } = body;
 
   if (!lot || !plan || !lat || !lon) {
     return NextResponse.json(
@@ -96,8 +103,12 @@ export async function POST(req: NextRequest) {
     if (cacheCheck.rows.length > 0) {
       const cached = cacheCheck.rows[0];
 
-      // Complete result → return from cache immediately
+      // Complete result → update display_address then return from cache
       if (cached.analysis_status === "complete") {
+        await db.query(
+          `UPDATE parcels SET display_address = $1 WHERE id = $2`,
+          [display_address, cached.parcel_id]
+        );
         return NextResponse.json({ ...cached, cached: true });
       }
 
@@ -124,16 +135,43 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 2. Create parcel record ─────────────────────────────────────────
+    const complexGeoJson = complex_geometry ? JSON.stringify(complex_geometry) : null;
     const parcelInsert = await db.query<{ id: string }>(
-      `INSERT INTO parcels (cadastre_lot, cadastre_plan, lot_area_sqm, display_address, geometry, lga_name, zone_code, zone_name)
-       VALUES ($1, $2, $3, $4, ST_SetSRID(ST_GeomFromGeoJSON($5), 7844), $6, $7, $8)
+      `INSERT INTO parcels (
+         cadastre_lot, cadastre_plan, lot_area_sqm, display_address, geometry,
+         lga_name, zone_code, zone_name,
+         property_type, plan_prefix, address_count, flat_types, building_name,
+         complex_geometry, complex_lot_count, tenure_type
+       )
+       VALUES (
+         $1, $2, $3, $4, ST_SetSRID(ST_GeomFromGeoJSON($5), 7844),
+         $6, $7, $8,
+         $9, $10, $11, $12, $13,
+         CASE WHEN $14::text IS NOT NULL THEN ST_SetSRID(ST_GeomFromGeoJSON($14), 7844) ELSE NULL END,
+         $15, $16
+       )
        ON CONFLICT (cadastre_lot, cadastre_plan) DO UPDATE
          SET display_address = EXCLUDED.display_address,
              lga_name = COALESCE(EXCLUDED.lga_name, parcels.lga_name),
              zone_code = COALESCE(EXCLUDED.zone_code, parcels.zone_code),
-             zone_name = COALESCE(EXCLUDED.zone_name, parcels.zone_name)
+             zone_name = COALESCE(EXCLUDED.zone_name, parcels.zone_name),
+             property_type = EXCLUDED.property_type,
+             plan_prefix = EXCLUDED.plan_prefix,
+             address_count = EXCLUDED.address_count,
+             flat_types = EXCLUDED.flat_types,
+             building_name = EXCLUDED.building_name,
+             complex_geometry = EXCLUDED.complex_geometry,
+             complex_lot_count = EXCLUDED.complex_lot_count,
+             tenure_type = EXCLUDED.tenure_type
        RETURNING id`,
-      [lot, plan, lot_area_sqm, display_address, JSON.stringify(geometry), lga_name ?? null, zone_code ?? null, zone_name ?? null]
+      [
+        lot, plan, lot_area_sqm, display_address, JSON.stringify(geometry),
+        lga_name ?? null, zone_code ?? null, zone_name ?? null,
+        property_type ?? null, plan_prefix ?? null, address_count ?? null,
+        flat_types ?? null, building_name ?? null,
+        complexGeoJson,
+        complex_lot_count ?? null, tenure_type ?? null,
+      ]
     );
     const parcelId = parcelInsert.rows[0].id;
 
@@ -169,6 +207,7 @@ export async function POST(req: NextRequest) {
         lat,
         lon,
         lot_area_sqm,
+        property_type: property_type ?? null,
       }),
     });
 
