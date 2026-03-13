@@ -253,6 +253,7 @@ export default function AnalysisPage() {
   const [visibleNearbyPlans, setVisibleNearbyPlans] = useState<Set<string>>(new Set());
   const [focusedNearbyPlan, setFocusedNearbyPlan] = useState<{ lat: number; lng: number } | null>(null);
   const [expandedPlanAddresses, setExpandedPlanAddresses] = useState<Set<string>>(new Set());
+  const [nearbySearch, setNearbySearch] = useState("");
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -312,7 +313,15 @@ export default function AnalysisPage() {
     if (!nearbyData) return [];
     return nearbyData.plans
       .filter((p) => visibleNearbyPlans.has(p.plan))
-      .map((p) => ({ plan: p.plan, rings: p.boundary_coords }));
+      .map((p) => ({
+        plan: p.plan,
+        rings: p.boundary_coords,
+        addresses: p.addresses,
+        lot_count: p.lot_count,
+        total_area_sqm: p.total_area_sqm,
+        distance_m: p.distance_m,
+        centroid: p.centroid,
+      }));
   }, [nearbyData, visibleNearbyPlans]);
 
   async function poll() {
@@ -806,6 +815,31 @@ export default function AnalysisPage() {
                     </div>
                   ) : nearbyData ? (
                   <>
+                  <div className="px-3 py-2 border-b border-white/[0.04]">
+                    <div className="relative">
+                      <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="11" cy="11" r="8" />
+                        <path d="M21 21l-4.35-4.35" />
+                      </svg>
+                      <input
+                        type="text"
+                        value={nearbySearch}
+                        onChange={(e) => setNearbySearch(e.target.value)}
+                        placeholder="Search addresses…"
+                        className="w-full bg-white/[0.04] border border-white/[0.06] rounded text-[11px] text-zinc-300 placeholder-zinc-600 pl-6 pr-6 py-1.5 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.06] transition-colors"
+                      />
+                      {nearbySearch && (
+                        <button
+                          onClick={() => setNearbySearch("")}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-zinc-400 transition-colors"
+                        >
+                          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                            <path d="M18 6L6 18M6 6l12 12" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  </div>
                   {(
                     [
                       { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0 },
@@ -814,10 +848,16 @@ export default function AnalysisPage() {
                       { label: "Within 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000 },
                     ]
                   ).map(({ label, key, maxDist, minDist }) => {
+                    const searchTerm = nearbySearch.trim().toLowerCase();
                     const bandPlans = nearbyData.plans.filter(
-                      (p) => p.distance_m <= maxDist && p.distance_m > minDist
+                      (p) =>
+                        p.distance_m <= maxDist &&
+                        p.distance_m > minDist &&
+                        (searchTerm === "" ||
+                          p.plan.toLowerCase().includes(searchTerm) ||
+                          p.addresses.some((a) => a.toLowerCase().includes(searchTerm)))
                     );
-                    const isExpanded = expandedBands.has(key);
+                    const isExpanded = expandedBands.has(key) || (searchTerm !== "" && bandPlans.length > 0);
                     const allBandVisible = bandPlans.length > 0 && bandPlans.every((p) => visibleNearbyPlans.has(p.plan));
                     return (
                       <div key={key}>

@@ -35,55 +35,91 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "parcel_id is required" }, { status: 400 });
   }
 
-  try {
-    const result = await db.query<NearbyPlanRow>(
-      `WITH ref AS (
-         SELECT
-           ST_Centroid(geometry) AS geom,
-           lga_name,
-           cadastre_plan
-         FROM parcels
-         WHERE id = $1
-       ),
-       addr_candidates AS (
-         SELECT
-           a.plan,
-           COUNT(DISTINCT a.lot)  AS lot_count,
-           array_agg(DISTINCT a.address ORDER BY a.address)
-             FILTER (WHERE a.address IS NOT NULL AND a.address != '') AS addresses,
-           MIN(ST_Distance(a.geometry::geography, ref.geom::geography)) AS dist_m
-         FROM qld_cadastre_address a, ref
-         WHERE a.plan LIKE 'SP%'
-           AND a.local_authority = ref.lga_name
-           AND a.plan != ref.cadastre_plan
-           AND ST_DWithin(a.geometry::geography, ref.geom::geography, 20000)
-         GROUP BY a.plan
-         HAVING COUNT(DISTINCT a.lot) BETWEEN 2 AND 6
-           AND (
-             bool_or(a.unit_number IS NOT NULL AND a.unit_number != '')
-             OR bool_or(a.street_no_1_suffix IS NOT NULL AND a.street_no_1_suffix != '')
-           )
-       )
+  // Shared CTE fragment (used in both queries)
+  const sharedCte = `
+     ref AS (
        SELECT
-         ac.plan,
-         ac.lot_count,
-         ac.addresses,
-         ac.dist_m,
-         SUM(cp.lot_area)        AS total_area_sqm,
-         ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
-         ST_Y(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lat,
-         ST_X(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lon
-       FROM addr_candidates ac
-       JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
-       GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
-       HAVING SUM(cp.lot_area) <= 6000
-       ORDER BY ac.dist_m
-       LIMIT 100`,
-      [parcelId]
-    );
+         ST_Centroid(geometry) AS geom,
+         lga_name,
+         cadastre_plan
+       FROM parcels
+       WHERE id = $1
+     ),
+     addr_candidates AS (
+       SELECT
+         a.plan,
+         COUNT(DISTINCT a.lot)  AS lot_count,
+         array_agg(DISTINCT a.address ORDER BY a.address)
+           FILTER (WHERE a.address IS NOT NULL AND a.address != '') AS addresses,
+         MIN(ST_Distance(a.geometry::geography, ref.geom::geography)) AS dist_m
+       FROM qld_cadastre_address a, ref
+       WHERE a.plan LIKE 'SP%'
+         AND a.local_authority = ref.lga_name
+         AND a.plan != ref.cadastre_plan
+         AND ST_DWithin(a.geometry::geography, ref.geom::geography, 20000)
+       GROUP BY a.plan
+       HAVING COUNT(DISTINCT a.lot) BETWEEN 2 AND 6
+         AND bool_and(a.street_no_2 IS NULL OR a.street_no_2 = '')
+         AND (
+           (
+             bool_or(a.unit_number IS NOT NULL AND a.unit_number != '')
+             AND COUNT(DISTINCT a.street_no_1) = 1
+           )
+           OR COUNT(DISTINCT a.street_no_1 || '-' || a.street_name) < COUNT(DISTINCT a.lot)
+         )
+     )`;
+
+  try {
+    // Run both queries in parallel: accurate counts (no geometry) + plan details (limited)
+    const [countResult, result] = await Promise.all([
+      db.query<{ within_2km: string; within_5km: string; within_10km: string; within_20km: string }>(
+        `WITH ${sharedCte},
+         filtered AS (
+           SELECT ac.dist_m
+           FROM addr_candidates ac
+           JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
+           GROUP BY ac.plan, ac.dist_m
+           HAVING SUM(cp.lot_area) <= 6000
+         )
+         SELECT
+           COUNT(*) FILTER (WHERE dist_m <= 2000)  AS within_2km,
+           COUNT(*) FILTER (WHERE dist_m <= 5000)  AS within_5km,
+           COUNT(*) FILTER (WHERE dist_m <= 10000) AS within_10km,
+           COUNT(*) FILTER (WHERE dist_m <= 20000) AS within_20km
+         FROM filtered`,
+        [parcelId]
+      ),
+      db.query<NearbyPlanRow>(
+        `WITH ${sharedCte}
+         SELECT
+           ac.plan,
+           ac.lot_count,
+           ac.addresses,
+           ac.dist_m,
+           SUM(cp.lot_area)        AS total_area_sqm,
+           ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
+           ST_Y(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lat,
+           ST_X(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lon
+         FROM addr_candidates ac
+         JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
+         GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
+         HAVING SUM(cp.lot_area) <= 6000
+         ORDER BY ac.dist_m
+         LIMIT 100`,
+        [parcelId]
+      ),
+    ]);
+
+    const cr = countResult.rows[0];
+    const counts = {
+      within_2km: Number(cr?.within_2km ?? 0),
+      within_5km: Number(cr?.within_5km ?? 0),
+      within_10km: Number(cr?.within_10km ?? 0),
+      within_20km: Number(cr?.within_20km ?? 0),
+    };
 
     if (result.rows.length === 0) {
-      return NextResponse.json({ counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 }, plans: [] });
+      return NextResponse.json({ counts, plans: [] });
     }
 
     // Parse GeoJSON boundaries into [lat, lng] coordinate arrays
@@ -109,14 +145,6 @@ export async function GET(req: NextRequest) {
         boundary_coords: rings,
       };
     });
-
-    // Compute cumulative counts per band
-    const counts = {
-      within_2km: plans.filter((p) => p.distance_m <= 2000).length,
-      within_5km: plans.filter((p) => p.distance_m <= 5000).length,
-      within_10km: plans.filter((p) => p.distance_m <= 10000).length,
-      within_20km: plans.filter((p) => p.distance_m <= 20000).length,
-    };
 
     return NextResponse.json({ counts, plans });
   } catch (err) {

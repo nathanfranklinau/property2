@@ -50,6 +50,27 @@ type PropertyMapProps = {
   readOnly?: boolean;
   /** Complex boundary for BUP/GTP — rendered as dashed outline behind the lot boundary. */
   complexBoundary?: [number, number][][]; // array of rings [[lat, lon], ...]
+  /** Nearby subdivision boundaries to display on map. */
+  nearbySubdivisions?: {
+    plan: string;
+    rings: [number, number][][];
+    addresses: string[];
+    lot_count: number;
+    total_area_sqm: number;
+    distance_m: number;
+    centroid: { lat: number; lng: number };
+  }[];
+  /** When set, the map pans/zooms to this location (for locating a nearby subdivision). */
+  focusedNearbyPlan?: { lat: number; lng: number } | null;
+  /** Called when user clicks a nearby subdivision polygon. */
+  onNearbyPlanClick?: (plan: {
+    plan: string;
+    addresses: string[];
+    lot_count: number;
+    total_area_sqm: number;
+    distance_m: number;
+    centroid: { lat: number; lng: number };
+  }) => void;
 };
 
 type LatLng = google.maps.LatLngLiteral;
@@ -706,6 +727,9 @@ function MapInterior({
   visibleEncumbranceTypes,
   readOnly = false,
   complexBoundary,
+  nearbySubdivisions,
+  focusedNearbyPlan,
+  onNearbyPlanClick,
 }: {
   boundaryCoords: [number, number][];
   footprints: BuildingFootprint[];
@@ -714,6 +738,24 @@ function MapInterior({
   visibleEncumbranceTypes?: Set<string>;
   readOnly?: boolean;
   complexBoundary?: [number, number][][];
+  nearbySubdivisions?: {
+    plan: string;
+    rings: [number, number][][];
+    addresses: string[];
+    lot_count: number;
+    total_area_sqm: number;
+    distance_m: number;
+    centroid: { lat: number; lng: number };
+  }[];
+  focusedNearbyPlan?: { lat: number; lng: number } | null;
+  onNearbyPlanClick?: (plan: {
+    plan: string;
+    addresses: string[];
+    lot_count: number;
+    total_area_sqm: number;
+    distance_m: number;
+    centroid: { lat: number; lng: number };
+  }) => void;
 }) {
   const map = useMap();
 
@@ -729,6 +771,15 @@ function MapInterior({
   const [drawingVertices, setDrawingVertices] = useState<LatLng[]>([]);
   const [rectFirstCorner, setRectFirstCorner] = useState<LatLng | null>(null);
   const [showMeasurements, setShowMeasurements] = useState(false);
+  const [nearbyInfoWindow, setNearbyInfoWindow] = useState<{
+    plan: string;
+    addresses: string[];
+    lot_count: number;
+    total_area_sqm: number;
+    distance_m: number;
+    position: LatLng;
+  } | null>(null);
+  const nearbyInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   const { pushChange, undo, redo, canUndo, canRedo } = useHistory(
     footprints,
@@ -974,6 +1025,127 @@ function MapInterior({
       complexBoundaryRef.current = [];
     };
   }, [map, complexBoundary]);
+
+  // ── Pan to focused nearby subdivision ────────────────────────────────
+  useEffect(() => {
+    if (!map || !focusedNearbyPlan) return;
+    map.panTo(focusedNearbyPlan);
+    const currentZoom = map.getZoom();
+    if (currentZoom != null && currentZoom > 17) map.setZoom(17);
+  }, [map, focusedNearbyPlan]);
+
+  // ── Render nearby subdivision boundaries ──────────────────────────────
+  const nearbySubdivisionRef = useRef<google.maps.Polygon[]>([]);
+  useEffect(() => {
+    nearbySubdivisionRef.current.forEach((p) => p.setMap(null));
+    nearbySubdivisionRef.current = [];
+    if (!map || !nearbySubdivisions || nearbySubdivisions.length === 0) return;
+
+    for (const sub of nearbySubdivisions) {
+      for (const ring of sub.rings) {
+        const path = ring.map(([lat, lng]) => ({ lat, lng }));
+        const poly = new google.maps.Polygon({
+          paths: path,
+          fillColor: "#6366F1",
+          fillOpacity: 0.25,
+          strokeColor: "#818CF8",
+          strokeWeight: 3,
+          strokeOpacity: 0.9,
+          clickable: true,
+          zIndex: 0,
+        });
+        poly.setMap(map);
+
+        poly.addListener("click", (e: google.maps.PolyMouseEvent) => {
+          const position = e.latLng?.toJSON() ?? sub.centroid;
+          setNearbyInfoWindow({
+            plan: sub.plan,
+            addresses: sub.addresses,
+            lot_count: sub.lot_count,
+            total_area_sqm: sub.total_area_sqm,
+            distance_m: sub.distance_m,
+            position,
+          });
+          onNearbyPlanClick?.({
+            plan: sub.plan,
+            addresses: sub.addresses,
+            lot_count: sub.lot_count,
+            total_area_sqm: sub.total_area_sqm,
+            distance_m: sub.distance_m,
+            centroid: sub.centroid,
+          });
+        });
+
+        poly.addListener("mouseover", () => {
+          poly.setOptions({ fillOpacity: 0.45, strokeWeight: 4 });
+        });
+        poly.addListener("mouseout", () => {
+          poly.setOptions({ fillOpacity: 0.25, strokeWeight: 3 });
+        });
+
+        nearbySubdivisionRef.current.push(poly);
+      }
+    }
+
+    return () => {
+      nearbySubdivisionRef.current.forEach((p) => p.setMap(null));
+      nearbySubdivisionRef.current = [];
+    };
+  }, [map, nearbySubdivisions, onNearbyPlanClick]);
+
+  // ── Nearby subdivision InfoWindow ──────────────────────────────────────
+  useEffect(() => {
+    if (!map) return;
+
+    if (nearbyInfoWindowRef.current) {
+      nearbyInfoWindowRef.current.close();
+      nearbyInfoWindowRef.current = null;
+    }
+
+    if (!nearbyInfoWindow) return;
+
+    const distKm = (nearbyInfoWindow.distance_m / 1000).toFixed(1);
+    const area = nearbyInfoWindow.total_area_sqm.toLocaleString();
+    const addressList = nearbyInfoWindow.addresses
+      .map((a) => `<li style="margin:1px 0">${a}</li>`)
+      .join("");
+
+    const content = `
+      <div style="font-family:system-ui,sans-serif;font-size:13px;max-width:280px;line-height:1.4">
+        <div style="font-weight:600;font-size:14px;margin-bottom:6px;color:#1e1b4b">${nearbyInfoWindow.plan}</div>
+        <ul style="margin:0 0 8px 0;padding-left:16px;color:#374151">${addressList}</ul>
+        <div style="display:flex;gap:12px;color:#6b7280;font-size:12px">
+          <span>${nearbyInfoWindow.lot_count} lots</span>
+          <span>${area} m²</span>
+          <span>${distKm} km away</span>
+        </div>
+      </div>`;
+
+    const iw = new google.maps.InfoWindow({ content, position: nearbyInfoWindow.position });
+    iw.open(map);
+    nearbyInfoWindowRef.current = iw;
+
+    const closeListener = iw.addListener("closeclick", () => setNearbyInfoWindow(null));
+    return () => {
+      google.maps.event.removeListener(closeListener);
+      iw.close();
+    };
+  }, [map, nearbyInfoWindow]);
+
+  // Helper: check if a point falls inside any nearby subdivision polygon
+  const isInsideNearbySubdivision = useCallback(
+    (point: LatLng): boolean => {
+      if (!nearbySubdivisions || nearbySubdivisions.length === 0) return false;
+      for (const sub of nearbySubdivisions) {
+        for (const ring of sub.rings) {
+          const poly = ring.map(([lat, lng]) => ({ lat, lng }));
+          if (pointInPolygon(point, poly)) return true;
+        }
+      }
+      return false;
+    },
+    [nearbySubdivisions]
+  );
 
   // ── Render building polygons ─────────────────────────────────────────────
   useEffect(() => {
@@ -1402,10 +1574,9 @@ function MapInterior({
         "click",
         (e: google.maps.MapMouseEvent) => {
           if (!e.latLng) return;
-          const point = clampToProperty(
-            { lat: e.latLng.lat(), lng: e.latLng.lng() },
-            boundaryPath
-          );
+          const raw = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+          if (isInsideNearbySubdivision(raw)) return;
+          const point = clampToProperty(raw, boundaryPath);
           setDrawingVertices((prev) => [...prev, point]);
         }
       );
@@ -1432,10 +1603,9 @@ function MapInterior({
         "click",
         (e: google.maps.MapMouseEvent) => {
           if (!e.latLng) return;
-          const point = clampToProperty(
-            { lat: e.latLng.lat(), lng: e.latLng.lng() },
-            boundaryPath
-          );
+          const raw = { lat: e.latLng.lat(), lng: e.latLng.lng() };
+          if (isInsideNearbySubdivision(raw)) return;
+          const point = clampToProperty(raw, boundaryPath);
           setRectFirstCorner((prev) => {
             if (!prev) return point;
             const corners: LatLng[] = [
@@ -1453,7 +1623,7 @@ function MapInterior({
         mapClickListenerRef.current?.remove();
       };
     }
-  }, [map, mode, boundaryPath, finalizePolygon]);
+  }, [map, mode, boundaryPath, finalizePolygon, isInsideNearbySubdivision]);
 
   // Change cursor based on mode
   useEffect(() => {
@@ -1497,6 +1667,9 @@ export default function PropertyMap({
   onFootprintsChange,
   readOnly,
   complexBoundary,
+  nearbySubdivisions,
+  focusedNearbyPlan,
+  onNearbyPlanClick,
 }: PropertyMapProps) {
   return (
     <APIProvider apiKey={apiKey}>
@@ -1504,7 +1677,7 @@ export default function PropertyMap({
         <Map
           defaultCenter={centroid}
           defaultZoom={19}
-          mapTypeId="satellite"
+          mapTypeId="hybrid"
           disableDefaultUI={true}
           zoomControl={true}
           minZoom={10}
@@ -1518,6 +1691,9 @@ export default function PropertyMap({
             onFootprintsChange={onFootprintsChange}
             readOnly={readOnly}
             complexBoundary={complexBoundary}
+            nearbySubdivisions={nearbySubdivisions}
+            focusedNearbyPlan={focusedNearbyPlan}
+            onNearbyPlanClick={onNearbyPlanClick}
           />
         </Map>
       </div>
