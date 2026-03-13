@@ -1047,10 +1047,10 @@ function MapInterior({
         const poly = new google.maps.Polygon({
           paths: path,
           fillColor: "#6366F1",
-          fillOpacity: 0.25,
-          strokeColor: "#818CF8",
-          strokeWeight: 3,
-          strokeOpacity: 0.9,
+          fillOpacity: 0.35,
+          strokeColor: "#A5B4FC",
+          strokeWeight: 5,
+          strokeOpacity: 1,
           clickable: true,
           zIndex: 0,
         });
@@ -1077,10 +1077,10 @@ function MapInterior({
         });
 
         poly.addListener("mouseover", () => {
-          poly.setOptions({ fillOpacity: 0.45, strokeWeight: 4 });
+          poly.setOptions({ fillOpacity: 0.55, strokeWeight: 6 });
         });
         poly.addListener("mouseout", () => {
-          poly.setOptions({ fillOpacity: 0.25, strokeWeight: 3 });
+          poly.setOptions({ fillOpacity: 0.35, strokeWeight: 5 });
         });
 
         nearbySubdivisionRef.current.push(poly);
