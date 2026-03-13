@@ -53,6 +53,16 @@ type AnalysisStatus = {
   tenure_type: string | null;
 };
 
+type NearbyPlan = {
+  plan: string;
+  addresses: string[];
+  lot_count: number;
+  total_area_sqm: number;
+  distance_m: number;
+  centroid: { lat: number; lng: number };
+  boundary_coords: [number, number][][];
+};
+
 type Stage = "queuing" | "imagery" | "analysing" | "complete" | "failed";
 
 function getStage(status: AnalysisStatus): Stage {
@@ -234,13 +244,15 @@ export default function AnalysisPage() {
   const [activeTab, setActiveTab] = useState<TabId>("free-space");
   const [showNotice, setShowNotice] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [nearbySubdivisions, setNearbySubdivisions] = useState<{
-    within_2km: number;
-    within_5km: number;
-    within_10km: number;
-    within_20km: number;
-    within_50km: number;
+  const [nearbyData, setNearbyData] = useState<{
+    counts: { within_2km: number; within_5km: number; within_10km: number; within_20km: number };
+    plans: NearbyPlan[];
   } | null>(null);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
+  const [expandedBands, setExpandedBands] = useState<Set<string>>(new Set());
+  const [visibleNearbyPlans, setVisibleNearbyPlans] = useState<Set<string>>(new Set());
+  const [focusedNearbyPlan, setFocusedNearbyPlan] = useState<{ lat: number; lng: number } | null>(null);
+  const [expandedPlanAddresses, setExpandedPlanAddresses] = useState<Set<string>>(new Set());
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -296,6 +308,13 @@ export default function AnalysisPage() {
     return undefined;
   }, [status?.complex_geometry]);
 
+  const nearbyBoundaries = useMemo(() => {
+    if (!nearbyData) return [];
+    return nearbyData.plans
+      .filter((p) => visibleNearbyPlans.has(p.plan))
+      .map((p) => ({ plan: p.plan, rings: p.boundary_coords }));
+  }, [nearbyData, visibleNearbyPlans]);
+
   async function poll() {
     try {
       const res = await fetch(
@@ -320,18 +339,12 @@ export default function AnalysisPage() {
       if (stage === "complete" || stage === "failed") {
         if (intervalRef.current) clearInterval(intervalRef.current);
         if (stage === "complete") {
+          setNearbyLoading(true);
           fetch(`/api/analysis/nearby-subdivisions?parcel_id=${encodeURIComponent(parcelId)}`)
             .then((r) => r.json())
-            .then((d) =>
-              setNearbySubdivisions({
-                within_2km: Number(d.within_2km),
-                within_5km: Number(d.within_5km),
-                within_10km: Number(d.within_10km),
-                within_20km: Number(d.within_20km),
-                within_50km: Number(d.within_50km),
-              })
-            )
-            .catch(console.error);
+            .then((d) => setNearbyData(d))
+            .catch(console.error)
+            .finally(() => setNearbyLoading(false));
         }
       }
     } catch (err) {
@@ -521,6 +534,8 @@ export default function AnalysisPage() {
                   onFootprintsChange={setFootprints}
                   readOnly={!typeInfo.allowDrawingTools}
                   complexBoundary={complexBoundaryRings}
+                  nearbySubdivisions={nearbyBoundaries}
+                  focusedNearbyPlan={focusedNearbyPlan}
                 />
               )}
           </div>
@@ -770,9 +785,9 @@ export default function AnalysisPage() {
 
 
               {/* Nearby Subdivision Activity */}
-              {typeInfo.allowSubdivision && nearbySubdivisions && (
+              {typeInfo.allowSubdivision && (nearbyLoading || nearbyData) && (
                 <SidebarSection
-                  title="Nearby Subdivision Activity"
+                  title="Nearby Subdivisions"
                   icon={
                     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                       <circle cx="12" cy="12" r="3" />
@@ -781,22 +796,193 @@ export default function AnalysisPage() {
                     </svg>
                   }
                 >
+                  {nearbyLoading && !nearbyData ? (
+                    <div className="flex items-center gap-2 px-3 py-3">
+                      <svg className="w-3.5 h-3.5 text-zinc-500 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth={2} opacity={0.25} />
+                        <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
+                      </svg>
+                      <span className="text-[11px] text-zinc-500">Finding nearby subdivisions…</span>
+                    </div>
+                  ) : nearbyData ? (
+                  <>
                   {(
                     [
-                      { label: "Within 2 km", value: nearbySubdivisions.within_2km },
-                      { label: "Within 5 km", value: nearbySubdivisions.within_5km },
-                      { label: "Within 10 km", value: nearbySubdivisions.within_10km },
-                      { label: "Within 20 km", value: nearbySubdivisions.within_20km },
-                      { label: "Within 50 km", value: nearbySubdivisions.within_50km },
-                    ] as const
-                  ).map(({ label, value }) => (
-                    <SidebarRow
-                      key={label}
-                      icon={<ActivityIcon />}
-                      label={label}
-                      value={value.toLocaleString()}
-                    />
-                  ))}
+                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0 },
+                      { label: "Within 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000 },
+                      { label: "Within 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000 },
+                      { label: "Within 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000 },
+                    ]
+                  ).map(({ label, key, maxDist, minDist }) => {
+                    const bandPlans = nearbyData.plans.filter(
+                      (p) => p.distance_m <= maxDist && p.distance_m > minDist
+                    );
+                    const isExpanded = expandedBands.has(key);
+                    const allBandVisible = bandPlans.length > 0 && bandPlans.every((p) => visibleNearbyPlans.has(p.plan));
+                    return (
+                      <div key={key}>
+                        <div className="flex items-center">
+                          <button
+                            onClick={() =>
+                              setExpandedBands((prev) => {
+                                const next = new Set(prev);
+                                next.has(key) ? next.delete(key) : next.add(key);
+                                return next;
+                              })
+                            }
+                            className="flex items-center justify-between flex-1 px-3 py-2.5 gap-3 hover:bg-white/[0.02] transition-colors min-w-0"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-zinc-600 flex-shrink-0"><ActivityIcon /></span>
+                              <span className="text-xs text-zinc-400">{label}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-semibold tabular-nums text-zinc-300">
+                                {nearbyData.counts[key].toLocaleString()}
+                              </span>
+                              <svg
+                                className={`w-3 h-3 text-zinc-600 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                              >
+                                <path d="M6 9l6 6 6-6" />
+                              </svg>
+                            </div>
+                          </button>
+                          {bandPlans.length > 0 && (
+                            <button
+                              onClick={() =>
+                                setVisibleNearbyPlans((prev) => {
+                                  const next = new Set(prev);
+                                  if (allBandVisible) {
+                                    bandPlans.forEach((p) => next.delete(p.plan));
+                                  } else {
+                                    bandPlans.forEach((p) => next.add(p.plan));
+                                  }
+                                  return next;
+                                })
+                              }
+                              className={`px-2 py-1 mr-2 text-[10px] rounded transition-colors flex-shrink-0 ${
+                                allBandVisible
+                                  ? "text-indigo-400 hover:text-indigo-300"
+                                  : "text-zinc-600 hover:text-zinc-400"
+                              }`}
+                              title={allBandVisible ? "Deselect all in this band" : "Select all in this band"}
+                            >
+                              {allBandVisible ? "Deselect all" : "Select all"}
+                            </button>
+                          )}
+                        </div>
+                        {isExpanded && bandPlans.length > 0 && (
+                          <div className="border-t border-white/[0.03]">
+                            {bandPlans.map((plan) => {
+                              const isVisible = visibleNearbyPlans.has(plan.plan);
+                              const addressesExpanded = expandedPlanAddresses.has(plan.plan);
+                              const extraAddresses = plan.addresses.slice(1);
+                              return (
+                                <div
+                                  key={plan.plan}
+                                  className={`flex items-start justify-between px-3 py-2 pl-8 gap-2 transition-colors ${
+                                    isVisible
+                                      ? "bg-indigo-500/[0.07] border-l-2 border-indigo-500/50"
+                                      : "border-l-2 border-transparent"
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1">
+                                    <p className={`text-[11px] font-medium truncate ${isVisible ? "text-indigo-200" : "text-zinc-300"}`}>
+                                      {plan.addresses.length > 0 ? plan.addresses[0] : plan.plan}
+                                    </p>
+                                    {extraAddresses.length > 0 && (
+                                      <>
+                                        <button
+                                          onClick={() =>
+                                            setExpandedPlanAddresses((prev) => {
+                                              const next = new Set(prev);
+                                              next.has(plan.plan) ? next.delete(plan.plan) : next.add(plan.plan);
+                                              return next;
+                                            })
+                                          }
+                                          className="text-[10px] text-indigo-400/70 hover:text-indigo-300 transition-colors mt-0.5"
+                                        >
+                                          {addressesExpanded ? "▾ Hide addresses" : `▸ +${extraAddresses.length} more address${extraAddresses.length > 1 ? "es" : ""}`}
+                                        </button>
+                                        {addressesExpanded && (
+                                          <ul className="mt-1 space-y-0.5">
+                                            {extraAddresses.map((addr) => (
+                                              <li key={addr} className="text-[10px] text-zinc-400 truncate">{addr}</li>
+                                            ))}
+                                          </ul>
+                                        )}
+                                      </>
+                                    )}
+                                    <p className={`text-[10px] mt-0.5 ${isVisible ? "text-indigo-400/60" : "text-zinc-600"}`}>
+                                      {plan.plan} · {plan.lot_count} lots · {plan.total_area_sqm.toLocaleString()} m² · {(plan.distance_m / 1000).toFixed(1)} km
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-0.5 flex-shrink-0 mt-0.5">
+                                    <button
+                                      onClick={() => {
+                                        if (!isVisible) {
+                                          setVisibleNearbyPlans((prev) => new Set(prev).add(plan.plan));
+                                        }
+                                        setFocusedNearbyPlan(plan.centroid);
+                                      }}
+                                      className={`p-1 rounded transition-colors ${isVisible ? "text-indigo-400/70 hover:text-indigo-300" : "text-zinc-700 hover:text-zinc-400"}`}
+                                      title="Locate on map"
+                                    >
+                                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                                        <path d="M12 22c1-4 6-7 6-12a6 6 0 10-12 0c0 5 5 8 6 12z" />
+                                        <circle cx="12" cy="10" r="2" />
+                                      </svg>
+                                    </button>
+                                    <button
+                                      onClick={() =>
+                                        setVisibleNearbyPlans((prev) => {
+                                          const next = new Set(prev);
+                                          next.has(plan.plan) ? next.delete(plan.plan) : next.add(plan.plan);
+                                          return next;
+                                        })
+                                      }
+                                      className={`p-1 rounded transition-colors ${
+                                        isVisible
+                                          ? "text-indigo-400 hover:text-indigo-300"
+                                          : "text-zinc-700 hover:text-zinc-500"
+                                      }`}
+                                      title={isVisible ? "Hide on map" : "Show on map"}
+                                    >
+                                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                                        {isVisible ? (
+                                          <>
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" />
+                                            <circle cx="12" cy="12" r="3" />
+                                          </>
+                                        ) : (
+                                          <>
+                                            <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
+                                            <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
+                                            <line x1="1" y1="1" x2="23" y2="23" />
+                                          </>
+                                        )}
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {isExpanded && bandPlans.length === 0 && (
+                          <p className="px-3 py-2 pl-8 text-[10px] text-zinc-600">
+                            No similar subdivisions in this band
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                  </>
+                  ) : null}
                 </SidebarSection>
               )}
 
@@ -821,6 +1007,21 @@ export default function AnalysisPage() {
                   label="Lot / Plan"
                   value={`${status.cadastre_lot} / ${status.cadastre_plan}`}
                 />
+                <div className="px-3 py-1.5">
+                  <a
+                    href={`https://apps.information.qld.gov.au/data/cadastre/GenerateSmartMap?q=${encodeURIComponent(`${status.cadastre_lot}\\${status.cadastre_plan}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                    View Smart Map (QLD)
+                  </a>
+                </div>
               </SidebarSection>
             </div>
           </div>

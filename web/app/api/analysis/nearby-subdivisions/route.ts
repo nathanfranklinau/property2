@@ -1,13 +1,32 @@
 /**
  * GET /api/analysis/nearby-subdivisions?parcel_id=...
  *
- * Returns counts of distinct plans (excluding the current plan) that contain
- * multiple lots — indicating prior subdivision activity — within each radius
- * band, restricted to the same LGA.
+ * Returns nearby plans that look like genuine residential subdivisions.
+ * Detection uses address signals from the cadastre address table:
+ *   - SP (Survey Plan) prefix only
+ *   - 2–6 lots per plan
+ *   - Total parcel area ≤ 6,000 m² (excludes estates/commercial plans)
+ *   - Has unit numbers (e.g. U1/45) or street number suffixes (e.g. 45A)
+ *     — these patterns distinguish genuine lot splits from estate stages
+ *   - Same LGA as subject
+ *   - Within 20 km (using address point geometry for fast spatial filtering)
+ *
+ * Returns plan details with all addresses, boundary geometry, and distance.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+
+type NearbyPlanRow = {
+  plan: string;
+  lot_count: string;
+  addresses: string[];
+  total_area_sqm: string;
+  dist_m: string;
+  boundary_geojson: string;
+  centroid_lat: string;
+  centroid_lon: string;
+};
 
 export async function GET(req: NextRequest) {
   const parcelId = req.nextUrl.searchParams.get("parcel_id");
@@ -17,41 +36,89 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await db.query<{
-      within_2km: string;
-      within_5km: string;
-      within_10km: string;
-      within_20km: string;
-      within_50km: string;
-    }>(
+    const result = await db.query<NearbyPlanRow>(
       `WITH ref AS (
-         SELECT ST_Centroid(geometry) AS geom, lga_name, cadastre_plan
+         SELECT
+           ST_Centroid(geometry) AS geom,
+           lga_name,
+           cadastre_plan
          FROM parcels
          WHERE id = $1
        ),
-       subdivided_nearby AS (
+       addr_candidates AS (
          SELECT
-           cp.plan,
-           MIN(ST_Distance(ST_Centroid(cp.geometry)::geography, ref.geom::geography)) AS dist_m
-         FROM qld_cadastre_parcels cp, ref
-         WHERE cp.shire_name = ref.lga_name
-           AND cp.plan != ref.cadastre_plan
-           AND cp.plan != ''
-           AND ST_DWithin(cp.geometry::geography, ref.geom::geography, 50000)
-         GROUP BY cp.plan
-         HAVING COUNT(*) > 1
+           a.plan,
+           COUNT(DISTINCT a.lot)  AS lot_count,
+           array_agg(DISTINCT a.address ORDER BY a.address)
+             FILTER (WHERE a.address IS NOT NULL AND a.address != '') AS addresses,
+           MIN(ST_Distance(a.geometry::geography, ref.geom::geography)) AS dist_m
+         FROM qld_cadastre_address a, ref
+         WHERE a.plan LIKE 'SP%'
+           AND a.local_authority = ref.lga_name
+           AND a.plan != ref.cadastre_plan
+           AND ST_DWithin(a.geometry::geography, ref.geom::geography, 20000)
+         GROUP BY a.plan
+         HAVING COUNT(DISTINCT a.lot) BETWEEN 2 AND 6
+           AND (
+             bool_or(a.unit_number IS NOT NULL AND a.unit_number != '')
+             OR bool_or(a.street_no_1_suffix IS NOT NULL AND a.street_no_1_suffix != '')
+           )
        )
        SELECT
-         COUNT(*) FILTER (WHERE dist_m <= 2000)  AS within_2km,
-         COUNT(*) FILTER (WHERE dist_m <= 5000)  AS within_5km,
-         COUNT(*) FILTER (WHERE dist_m <= 10000) AS within_10km,
-         COUNT(*) FILTER (WHERE dist_m <= 20000) AS within_20km,
-         COUNT(*) FILTER (WHERE dist_m <= 50000) AS within_50km
-       FROM subdivided_nearby`,
+         ac.plan,
+         ac.lot_count,
+         ac.addresses,
+         ac.dist_m,
+         SUM(cp.lot_area)        AS total_area_sqm,
+         ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
+         ST_Y(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lat,
+         ST_X(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lon
+       FROM addr_candidates ac
+       JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
+       GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
+       HAVING SUM(cp.lot_area) <= 6000
+       ORDER BY ac.dist_m
+       LIMIT 100`,
       [parcelId]
     );
 
-    return NextResponse.json(result.rows[0]);
+    if (result.rows.length === 0) {
+      return NextResponse.json({ counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 }, plans: [] });
+    }
+
+    // Parse GeoJSON boundaries into [lat, lng] coordinate arrays
+    const plans = result.rows.map((row) => {
+      const geo = JSON.parse(row.boundary_geojson);
+      let rings: [number, number][][] = [];
+
+      if (geo.type === "MultiPolygon") {
+        rings = (geo.coordinates as number[][][][]).map((poly) =>
+          poly[0].map(([lon, lat]) => [lat, lon] as [number, number])
+        );
+      } else if (geo.type === "Polygon") {
+        rings = [(geo.coordinates as number[][][])[0].map(([lon, lat]) => [lat, lon] as [number, number])];
+      }
+
+      return {
+        plan: row.plan,
+        addresses: row.addresses ?? [],
+        lot_count: Number(row.lot_count),
+        total_area_sqm: Math.round(Number(row.total_area_sqm)),
+        distance_m: Math.round(Number(row.dist_m)),
+        centroid: { lat: Number(row.centroid_lat), lng: Number(row.centroid_lon) },
+        boundary_coords: rings,
+      };
+    });
+
+    // Compute cumulative counts per band
+    const counts = {
+      within_2km: plans.filter((p) => p.distance_m <= 2000).length,
+      within_5km: plans.filter((p) => p.distance_m <= 5000).length,
+      within_10km: plans.filter((p) => p.distance_m <= 10000).length,
+      within_20km: plans.filter((p) => p.distance_m <= 20000).length,
+    };
+
+    return NextResponse.json({ counts, plans });
   } catch (err) {
     console.error("Nearby subdivisions error:", err);
     return NextResponse.json({ error: "Failed to fetch nearby subdivisions" }, { status: 500 });
