@@ -132,27 +132,12 @@ def detect_buildings(
             "_building_contours": list,
         }
     """
-    _empty = {
-        "main_house_size_sqm": 0.0,
-        "building_count": 0,
-        "all_buildings_sqm": [],
-        "total_buildings_sqm": 0.0,
-        "_boundary_mask": None,
-        "_boundary_contour": None,
-        "_building_contours": [],
-    }
-
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        log.warning("OpenCV not installed — building detection skipped")
-        return _empty
+    import cv2
+    import numpy as np
 
     styled_map = cv2.imread(str(styled_map_path))
     if styled_map is None:
-        log.error(f"Could not read styled map: {styled_map_path}")
-        return _empty
+        raise RuntimeError(f"Could not read styled map: {styled_map_path}")
 
     img_h, img_w = styled_map.shape[:2]
 
@@ -166,8 +151,7 @@ def detect_buildings(
 
     contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
-        log.warning("No red boundary contour found — was boundary_coords_wgs84 passed to image retrieval?")
-        return _empty
+        raise RuntimeError("No red boundary contour found in styled map — was boundary_coords_wgs84 passed to image retrieval?")
 
     boundary_contour = max(contours, key=cv2.contourArea)
     boundary_mask = np.zeros((img_h, img_w), dtype=np.uint8)
@@ -176,8 +160,7 @@ def detect_buildings(
     # ── Pixel → m² using boundary contour area ────────────────────────────
     boundary_area_px = cv2.contourArea(boundary_contour)
     if boundary_area_px < 1:
-        log.error("Zero-area property boundary contour")
-        return {**_empty, "_boundary_mask": boundary_mask, "_boundary_contour": boundary_contour}
+        raise RuntimeError("Zero-area property boundary contour — cannot calibrate pixel-to-m² ratio")
 
     sqm_per_pixel = lot_area_sqm / boundary_area_px
     log.info(f"  boundary={boundary_area_px:.0f}px, ratio={sqm_per_pixel:.5f}m²/px")
@@ -265,16 +248,11 @@ def create_satellite_masked(
     Used as input for YOLO pool detection to prevent detections from
     neighbouring properties.
     """
-    try:
-        import cv2
-    except ImportError:
-        log.warning("OpenCV not installed — satellite masking skipped")
-        return
+    import cv2
 
     satellite = cv2.imread(str(satellite_path))
     if satellite is None:
-        log.error(f"Could not read satellite: {satellite_path}")
-        return
+        raise RuntimeError(f"Could not read satellite image: {satellite_path}")
 
     if boundary_mask.shape[:2] != satellite.shape[:2]:
         boundary_mask = cv2.resize(boundary_mask, (satellite.shape[1], satellite.shape[0]))
@@ -305,25 +283,21 @@ def create_mask2_image(
         White  (255, 255, 255) = property boundary (3px, visible on dark bg)
         Black                  = outside property
     """
-    try:
-        import cv2
-        import numpy as np
-    except ImportError:
-        log.warning("OpenCV not installed — mask2 generation skipped")
-        return
+    import cv2
+    import numpy as np
 
     h, w = boundary_mask.shape[:2]
 
     # ── Unusable space (roads) from styled map ────────────────────────────
-    unusable_mask = np.zeros((h, w), dtype=np.uint8)
     styled_map_img = cv2.imread(str(styled_map_path))
-    if styled_map_img is not None:
-        if styled_map_img.shape[:2] != (h, w):
-            styled_map_img = cv2.resize(styled_map_img, (w, h))
-        hsv_m = cv2.cvtColor(styled_map_img, cv2.COLOR_BGR2HSV)
-        # Roads are hot pink on the styled map
-        pink = cv2.inRange(hsv_m, (150, 60, 80), (180, 255, 255))
-        unusable_mask = cv2.bitwise_and(pink, boundary_mask)
+    if styled_map_img is None:
+        raise RuntimeError(f"Could not read styled map for mask2: {styled_map_path}")
+    if styled_map_img.shape[:2] != (h, w):
+        styled_map_img = cv2.resize(styled_map_img, (w, h))
+    hsv_m = cv2.cvtColor(styled_map_img, cv2.COLOR_BGR2HSV)
+    # Roads are hot pink on the styled map
+    pink = cv2.inRange(hsv_m, (150, 60, 80), (180, 255, 255))
+    unusable_mask = cv2.bitwise_and(pink, boundary_mask)
 
     # ── Building mask (filled) ────────────────────────────────────────────
     building_mask = np.zeros((h, w), dtype=np.uint8)

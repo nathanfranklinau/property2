@@ -286,15 +286,15 @@ def run_analysis(
 
         # ── Step 4: Create satellite_masked.jpg ───────────────────────────
         satellite_masked_path = parcel_image_dir / "satellite_masked.jpg"
-        if boundary_mask is not None:
-            create_satellite_masked(
-                satellite_path=images["satellite"],
-                boundary_mask=boundary_mask,
-                output_path=satellite_masked_path,
-            )
-            update_analysis(conn, parcel_id, image_satellite_masked_path=str(satellite_masked_path))
-        else:
-            satellite_masked_path = images["satellite"]  # fallback to raw satellite
+        if boundary_mask is None:
+            raise RuntimeError("No property boundary detected — cannot create masked satellite image for pool detection")
+
+        create_satellite_masked(
+            satellite_path=images["satellite"],
+            boundary_mask=boundary_mask,
+            output_path=satellite_masked_path,
+        )
+        update_analysis(conn, parcel_id, image_satellite_masked_path=str(satellite_masked_path))
 
         # ── Step 5: Detect pools (YOLO on masked satellite) ───────────────
         from .pool_detection import detect_pools

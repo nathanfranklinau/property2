@@ -59,21 +59,14 @@ def detect_pools(
             "detections": [{"bbox": [x1, y1, x2, y2], "confidence": float, "area_sqm": float}, ...]
         }
     """
-    _empty = {"pool_count": 0, "pool_area_sqm": 0.0, "detections": []}
-
     if not Path(YOLO_MODEL_PATH).exists():
-        log.warning(
-            f"YOLO model not found at {YOLO_MODEL_PATH}. Pool detection skipped. "
+        raise RuntimeError(
+            f"YOLO model not found at {YOLO_MODEL_PATH}. "
             "Copy the custom pool model from the old project: "
             "../realestateopportunities/identification-layer/models/pool_detection/best.pt"
         )
-        return _empty
 
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        log.warning("ultralytics not installed — pool detection skipped")
-        return _empty
+    from ultralytics import YOLO
 
     model = YOLO(YOLO_MODEL_PATH)
     results = model(str(satellite_path), conf=CONFIDENCE_THRESHOLD, verbose=False)
