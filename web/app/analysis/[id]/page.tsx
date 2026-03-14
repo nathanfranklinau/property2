@@ -163,6 +163,20 @@ function sqm(value: number | null): string {
   return `${Math.round(value).toLocaleString()} m\u00B2`;
 }
 
+const UNIT_TYPE_LABELS: Record<string, string> = {
+  U: "Unit",
+  UNIT: "Unit",
+  T: "Townhouse",
+  V: "Villa",
+  APT: "Apartment",
+  FLAT: "Flat",
+  SE: "Suite",
+  SHOP: "Shop",
+  OFFICE: "Office",
+  STUDIO: "Studio",
+  LOT: "Lot",
+};
+
 // ─── Tab definitions ──────────────────────────────────────────────────────
 
 type TabId = "free-space" | "buildings" | "plots" | "easements" | "boundaries" | "subdivision";
@@ -255,6 +269,9 @@ export default function AnalysisPage() {
   const [expandedPlanAddresses, setExpandedPlanAddresses] = useState<Set<string>>(new Set());
   const [nearbySearch, setNearbySearch] = useState("");
   const [bandPage, setBandPage] = useState<Record<string, number>>({});
+  const [addressesOpen, setAddressesOpen] = useState(false);
+  const [unitAddresses, setUnitAddresses] = useState<string[] | null>(null);
+  const [unitAddressesLoading, setUnitAddressesLoading] = useState(false);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -615,17 +632,6 @@ export default function AnalysisPage() {
                 </div>
               </div>
 
-              {/* View mode tabs */}
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white">
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                  </svg>
-                  Free Space
-                </div>
-              </div>
-
               {/* Zone badge */}
               {status.zone_name && (
                 <div className="flex items-center gap-2">
@@ -650,30 +656,83 @@ export default function AnalysisPage() {
 
               {/* Multi-dwelling banner */}
               {propertyType === "multi_dwelling" && (
-                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 px-3 py-2.5">
-                  <p className="text-xs font-semibold text-blue-400">
-                    {status.address_count ?? 0} addresses on this lot
-                  </p>
-                  {status.flat_types && status.flat_types.length > 0 && (
-                    <p className="text-[11px] text-blue-400/70 mt-0.5">
-                      Types: {status.flat_types.join(", ")}
-                    </p>
+                <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 overflow-hidden">
+                  <button
+                    onClick={() => {
+                      if (!addressesOpen && unitAddresses === null) {
+                        setUnitAddressesLoading(true);
+                        fetch(`/api/properties/addresses?lot=${encodeURIComponent(status.cadastre_lot)}&plan=${encodeURIComponent(status.cadastre_plan)}`)
+                          .then((r) => r.json())
+                          .then((d) => setUnitAddresses(d.addresses ?? []))
+                          .catch(() => setUnitAddresses([]))
+                          .finally(() => setUnitAddressesLoading(false));
+                      }
+                      setAddressesOpen((o) => !o);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2.5 text-left"
+                  >
+                    <div>
+                      <p className="text-xs font-semibold text-blue-400">
+                        {status.address_count ?? 0} {(status.address_count ?? 0) === 1 ? "address" : "addresses"} on this lot
+                      </p>
+                      {status.flat_types && status.flat_types.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {status.flat_types.map((t) => (
+                            <span key={t} className="text-[10px] bg-blue-500/15 border border-blue-500/25 px-2 py-0.5 rounded-full text-blue-300/90 font-medium">
+                              {UNIT_TYPE_LABELS[t] ?? t}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <svg
+                      className={`w-3.5 h-3.5 text-blue-400/50 flex-shrink-0 ml-2 transition-transform ${addressesOpen ? "rotate-180" : ""}`}
+                      viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  {addressesOpen && (
+                    <div className="border-t border-blue-500/10 px-3 pb-3">
+                      {unitAddressesLoading ? (
+                        <p className="text-[11px] text-blue-400/50 pt-2">Loading…</p>
+                      ) : unitAddresses && unitAddresses.length > 0 ? (
+                        <ul className="space-y-1.5 pt-2">
+                          {unitAddresses.map((addr, i) => (
+                            <li key={i} className="text-[11px] text-blue-300/70 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400/30 flex-shrink-0" />
+                              {addr}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-[11px] text-blue-400/40 pt-2">No addresses found.</p>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
 
-              {/* Big numbers — free space + covered */}
-              {typeInfo.allowSubdivision && (
+              {/* Big numbers — lot size, free space, covered */}
+              {status.lot_area_sqm != null && (
                 <div className="flex items-end gap-4">
                   <div>
-                    <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Free</p>
+                    <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Lot Size</p>
                     <p className="text-4xl font-bold tracking-tight tabular-nums leading-none">
-                      {freeSpace != null ? Math.round(freeSpace).toLocaleString() : "—"}
+                      {Math.round(status.lot_area_sqm).toLocaleString()}
                       <span className="text-lg font-medium text-zinc-400 ml-0.5">m²</span>
                     </p>
                   </div>
-                  {status?.lot_area_sqm != null && !isNaN(totalStructuresArea) && (
+                  {freeSpace != null && !isNaN(totalStructuresArea) && (
                     <>
+                      <div className="w-px h-8 bg-white/10 mb-1 flex-shrink-0" />
+                      <div>
+                        <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Free</p>
+                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
+                          {Math.round(freeSpace).toLocaleString()}
+                          <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
+                        </p>
+                      </div>
                       <div className="w-px h-8 bg-white/10 mb-1 flex-shrink-0" />
                       <div>
                         <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
@@ -1070,6 +1129,41 @@ export default function AnalysisPage() {
                       </div>
                     );
                   })}
+                  {visibleNearbyPlans.size > 0 && (() => {
+                    const PLAN_META = [
+                      { prefix: "SP",  color: "#10B981", label: "Survey Plan",        desc: "Land formally split into separate freehold titles — each owner holds their own piece of ground." },
+                      { prefix: "BUP", color: "#6366F1", label: "Building Unit Plan", desc: "Older-style unit scheme (pre-1994) where owners hold a unit in a building with shared common areas." },
+                      { prefix: "GTP", color: "#F59E0B", label: "Group Title Plan",   desc: "Townhouses or villas where each home has its own title but owners share common driveways or gardens." },
+                    ] as const;
+                    const visibleTypes = new Set(
+                      [...visibleNearbyPlans].map((p) => p.match(/^(SP|BUP|GTP)/)?.[1]).filter(Boolean)
+                    );
+                    const active = PLAN_META.filter((m) => visibleTypes.has(m.prefix));
+                    if (active.length === 0) return null;
+                    return (
+                      <div className="px-3 py-2.5 border-t border-white/[0.04] flex items-center gap-3 flex-wrap">
+                        <span className="text-[9px] uppercase tracking-widest text-zinc-700 flex-shrink-0">Key</span>
+                        {active.map(({ prefix, color, label, desc }) => (
+                          <div key={prefix} className="relative group flex items-center gap-1.5 cursor-default">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
+                            <span className="text-[10px] font-medium text-zinc-500">{prefix}</span>
+                            <div className="absolute bottom-full left-0 mb-2 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 pointer-events-none">
+                              <p className="text-[10px] font-semibold text-zinc-300 mb-1">{prefix} — {label}</p>
+                              <p className="text-[10px] text-zinc-500 leading-relaxed">{desc}</p>
+                            </div>
+                          </div>
+                        ))}
+                        <a
+                          href="/blog/reading-a-cadastral-survey-plan"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-auto text-[9px] text-zinc-700 hover:text-indigo-400 transition-colors flex-shrink-0"
+                        >
+                          Learn more →
+                        </a>
+                      </div>
+                    );
+                  })()}
                   </>
                   ) : null}
                 </SidebarSection>
