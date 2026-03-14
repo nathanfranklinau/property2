@@ -254,6 +254,7 @@ export default function AnalysisPage() {
   const [focusedNearbyPlan, setFocusedNearbyPlan] = useState<{ lat: number; lng: number } | null>(null);
   const [expandedPlanAddresses, setExpandedPlanAddresses] = useState<Set<string>>(new Set());
   const [nearbySearch, setNearbySearch] = useState("");
+  const [bandPage, setBandPage] = useState<Record<string, number>>({});
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -310,7 +311,7 @@ export default function AnalysisPage() {
   }, [status?.complex_geometry]);
 
   const nearbyBoundaries = useMemo(() => {
-    if (!nearbyData) return [];
+    if (!nearbyData || !nearbyData.plans) return [];
     return nearbyData.plans
       .filter((p) => visibleNearbyPlans.has(p.plan))
       .map((p) => ({
@@ -350,9 +351,29 @@ export default function AnalysisPage() {
         if (stage === "complete") {
           setNearbyLoading(true);
           fetch(`/api/analysis/nearby-subdivisions?parcel_id=${encodeURIComponent(parcelId)}`)
-            .then((r) => r.json())
-            .then((d) => setNearbyData(d))
-            .catch(console.error)
+            .then((r) => {
+              if (!r.ok) {
+                console.warn(`Nearby subdivisions API returned ${r.status}`);
+                return { counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 }, plans: [] };
+              }
+              return r.json();
+            })
+            .then((d) => {
+              // Ensure the response has the expected structure
+              if (d && typeof d === 'object') {
+                setNearbyData({
+                  counts: d.counts || { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 },
+                  plans: d.plans || []
+                });
+              }
+            })
+            .catch((err) => {
+              console.error("Nearby subdivisions error:", err);
+              setNearbyData({
+                counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 },
+                plans: []
+              });
+            })
             .finally(() => setNearbyLoading(false));
         }
       }
@@ -824,7 +845,7 @@ export default function AnalysisPage() {
                       <input
                         type="text"
                         value={nearbySearch}
-                        onChange={(e) => setNearbySearch(e.target.value)}
+                        onChange={(e) => { setNearbySearch(e.target.value); setBandPage({}); }}
                         placeholder="Search addresses…"
                         className="w-full bg-white/[0.04] border border-white/[0.06] rounded text-[11px] text-zinc-300 placeholder-zinc-600 pl-6 pr-6 py-1.5 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.06] transition-colors"
                       />
@@ -842,14 +863,14 @@ export default function AnalysisPage() {
                   </div>
                   {(
                     [
-                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0 },
-                      { label: "Within 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000 },
-                      { label: "Within 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000 },
-                      { label: "Within 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000 },
+                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0, prevKey: null },
+                      { label: "2 km – 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000, prevKey: "within_2km" as const },
+                      { label: "5 km – 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000, prevKey: "within_5km" as const },
+                      { label: "10 km – 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000, prevKey: "within_10km" as const },
                     ]
-                  ).map(({ label, key, maxDist, minDist }) => {
+                  ).map(({ label, key, maxDist, minDist, prevKey }) => {
                     const searchTerm = nearbySearch.trim().toLowerCase();
-                    const bandPlans = nearbyData.plans.filter(
+                    const bandPlans = (nearbyData.plans || []).filter(
                       (p) =>
                         p.distance_m <= maxDist &&
                         p.distance_m > minDist &&
@@ -859,6 +880,9 @@ export default function AnalysisPage() {
                     );
                     const isExpanded = expandedBands.has(key) || (searchTerm !== "" && bandPlans.length > 0);
                     const allBandVisible = bandPlans.length > 0 && bandPlans.every((p) => visibleNearbyPlans.has(p.plan));
+                    const bandCount = prevKey
+                      ? (nearbyData.counts?.[key] || 0) - (nearbyData.counts?.[prevKey] || 0)
+                      : (nearbyData.counts?.[key] || 0);
                     return (
                       <div key={key}>
                         <div className="flex items-center">
@@ -878,7 +902,7 @@ export default function AnalysisPage() {
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-semibold tabular-nums text-zinc-300">
-                                {nearbyData.counts[key].toLocaleString()}
+                                {bandCount.toLocaleString()}
                               </span>
                               <svg
                                 className={`w-3 h-3 text-zinc-600 transition-transform ${isExpanded ? "rotate-180" : ""}`}
@@ -915,9 +939,14 @@ export default function AnalysisPage() {
                             </button>
                           )}
                         </div>
-                        {isExpanded && bandPlans.length > 0 && (
+                        {isExpanded && bandPlans.length > 0 && (() => {
+                          const PAGE_SIZE = 50;
+                          const currentPage = bandPage[key] ?? 0;
+                          const totalPages = Math.ceil(bandPlans.length / PAGE_SIZE);
+                          const pagedPlans = bandPlans.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+                          return (
                           <div className="border-t border-white/[0.03]">
-                            {bandPlans.map((plan) => {
+                            {pagedPlans.map((plan) => {
                               const isVisible = visibleNearbyPlans.has(plan.plan);
                               const addressesExpanded = expandedPlanAddresses.has(plan.plan);
                               const extraAddresses = plan.addresses.slice(1);
@@ -1011,8 +1040,29 @@ export default function AnalysisPage() {
                                 </div>
                               );
                             })}
+                            {totalPages > 1 && (
+                              <div className="flex items-center justify-between px-3 py-2 border-t border-white/[0.03]">
+                                <button
+                                  onClick={() => setBandPage((prev) => ({ ...prev, [key]: Math.max(0, currentPage - 1) }))}
+                                  disabled={currentPage === 0}
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-300 disabled:text-zinc-800 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  ← Prev
+                                </button>
+                                <span className="text-[10px] text-zinc-600">
+                                  {currentPage + 1} / {totalPages}
+                                </span>
+                                <button
+                                  onClick={() => setBandPage((prev) => ({ ...prev, [key]: Math.min(totalPages - 1, currentPage + 1) }))}
+                                  disabled={currentPage >= totalPages - 1}
+                                  className="text-[10px] text-zinc-500 hover:text-zinc-300 disabled:text-zinc-800 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  Next →
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        )}
+                        );})()}
                         {isExpanded && bandPlans.length === 0 && (
                           <p className="px-3 py-2 pl-8 text-[10px] text-zinc-600">
                             No similar subdivisions in this band

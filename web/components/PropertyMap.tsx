@@ -1048,8 +1048,8 @@ function MapInterior({
           paths: path,
           fillColor: "#6366F1",
           fillOpacity: 0.35,
-          strokeColor: "#A5B4FC",
-          strokeWeight: 5,
+          strokeColor: "#818CF8",
+          strokeWeight: 1.5,
           strokeOpacity: 1,
           clickable: true,
           zIndex: 0,
@@ -1077,10 +1077,10 @@ function MapInterior({
         });
 
         poly.addListener("mouseover", () => {
-          poly.setOptions({ fillOpacity: 0.55, strokeWeight: 6 });
+          poly.setOptions({ fillOpacity: 0.55, strokeWeight: 2.5 });
         });
         poly.addListener("mouseout", () => {
-          poly.setOptions({ fillOpacity: 0.35, strokeWeight: 5 });
+          poly.setOptions({ fillOpacity: 0.35, strokeWeight: 1.5 });
         });
 
         nearbySubdivisionRef.current.push(poly);

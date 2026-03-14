@@ -104,8 +104,7 @@ export async function GET(req: NextRequest) {
          JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
          GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
          HAVING SUM(cp.lot_area) <= 6000
-         ORDER BY ac.dist_m
-         LIMIT 100`,
+         ORDER BY ac.dist_m`,
         [parcelId]
       ),
     ]);
