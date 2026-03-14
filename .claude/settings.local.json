@@ -6,7 +6,10 @@
       "Bash(python3 -c \":*)",
       "Bash(pip install pyproj)",
       "WebFetch(domain:forums.whirlpool.net.au)",
-      "WebFetch(domain:developer.corelogic.asia)"
+      "WebFetch(domain:developer.corelogic.asia)",
+      "Bash(psql \"postgresql://realestate:realestate@localhost:5432/realestatev2\" -t -A -c \"SELECT plan, addresses FROM \\(SELECT plan, array_agg\\(DISTINCT address\\) AS addresses FROM qld_cadastre_address WHERE plan LIKE ''SP%'' GROUP BY plan HAVING COUNT\\(DISTINCT lot\\) BETWEEN 2 AND 6\\) sub LIMIT 5\")",
+      "Bash(psql \"postgresql://realestate:realestate@localhost:5432/realestatev2\" -t -A -c \"SELECT id, display_address, lga_name FROM parcels LIMIT 3\")",
+      "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \":*)"
     ]
   }
 }
