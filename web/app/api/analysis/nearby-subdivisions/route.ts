@@ -60,6 +60,7 @@ export async function GET(req: NextRequest) {
        GROUP BY a.plan
        HAVING COUNT(DISTINCT a.lot) BETWEEN 2 AND 6
          AND bool_and(a.street_no_2 IS NULL OR a.street_no_2 = '')
+         AND COUNT(DISTINCT a.street_name) = 1
          AND (
            (
              bool_or(a.unit_number IS NOT NULL AND a.unit_number != '')

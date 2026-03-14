@@ -106,11 +106,11 @@ export function extractPlanPrefix(plan: string): string | null {
   return match ? match[0].toUpperCase() : null;
 }
 
-/** Badge colour for each property type */
+/** Badge colour for each property type — aligned with plan-prefix colours on the map (SP=emerald, BUP=indigo, GTP=amber) */
 export const PROPERTY_TYPE_COLORS: Record<PropertyType, string> = {
-  house: "bg-emerald-500/20 text-emerald-400",
-  multi_dwelling: "bg-blue-500/20 text-blue-400",
-  unit: "bg-purple-500/20 text-purple-400",
-  townhouse: "bg-teal-500/20 text-teal-400",
+  house: "bg-emerald-500/20 text-emerald-400",        // SP/RP freehold → emerald
+  multi_dwelling: "bg-emerald-500/20 text-emerald-400", // SP/RP freehold → emerald
+  unit: "bg-indigo-500/20 text-indigo-400",           // BUP → indigo
+  townhouse: "bg-amber-500/20 text-amber-400",        // GTP → amber
   special_tenure: "bg-amber-500/20 text-amber-400",
 };

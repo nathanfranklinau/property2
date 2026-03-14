@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Script from "next/script";
+import { APIProvider } from "@vis.gl/react-google-maps";
 
 type Suggestion = { text: string; source: "gnaf" | "google" };
 
@@ -147,13 +147,11 @@ export default function Home() {
   }
 
   return (
-    <>
-      <Script
-        src={`https://maps.googleapis.com/maps/api/js?key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`}
-        strategy="afterInteractive"
-        onLoad={onGoogleLoad}
-      />
-
+    <APIProvider
+      apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY!}
+      libraries={["places"]}
+      onLoad={onGoogleLoad}
+    >
       <div className="flex-1 flex flex-col items-center justify-center px-6 py-20">
         <div className="w-full max-w-lg">
           <p className="text-xs font-semibold uppercase tracking-widest text-zinc-500 mb-4">
@@ -240,7 +238,7 @@ export default function Home() {
         </form>
         </div>
       </div>
-    </>
+    </APIProvider>
   );
 }
 

@@ -136,6 +136,14 @@ export async function GET(req: NextRequest) {
     // streetNumber="67" for both "67 Joseph St" and "67A Joseph St". So we
     // extract the house number directly from the raw input address instead,
     // which preserves the suffix (e.g. "67A").
+    //
+    // Unit prefix detection: if the address starts with a unit prefix like
+    // "U1/31", "Unit 1/31", "1/31", extract the unit number for precise lot
+    // resolution. Without it, "U1/" and "U2/" at the same street number are
+    // indistinguishable by street_number alone.
+    const unitPrefixMatch = address.match(/^(?:[A-Za-z]+\s*)?(\d+)\s*\//i);
+    const inputUnitNumber = unitPrefixMatch?.[1] ?? null;
+
     if (validation.route) {
       // Extract leading house number (e.g. "67A" from "67A Joseph Street, ...")
       const rawNumberMatch = address.match(/^(\d+[A-Za-z]?)\s/i);
@@ -143,6 +151,12 @@ export async function GET(req: NextRequest) {
       const streetNameOnly = validation.route.split(" ").slice(0, -1).join(" ") || validation.route;
 
       if (refinementNumber) {
+        // If a unit number was extracted from the address, filter by it so that
+        // "U1/31 Brier Cr" resolves to Lot 1 and "U2/31 Brier Cr" to Lot 2.
+        const unitFilter = inputUnitNumber ? `AND ca.unit_number = $4` : "";
+        const params: (string | number)[] = [parcelRow.plan, refinementNumber, streetNameOnly];
+        if (inputUnitNumber) params.push(inputUnitNumber);
+
         const refinement = await db.query<{
           lot: string;
           plan: string;
@@ -162,17 +176,34 @@ export async function GET(req: NextRequest) {
            WHERE ca.plan = $1
              AND ca.street_number = $2
              AND UPPER(ca.street_name) = UPPER($3)
+             ${unitFilter}
            LIMIT 1`,
-          [
-            parcelRow.plan,
-            refinementNumber,
-            streetNameOnly,
-          ]
+          params
         );
 
         if (refinement.rows.length > 0) {
           parcelRow = refinement.rows[0];
         }
+      }
+    }
+
+    // ── SP community titles: show full site when no unit specified ────────────
+    // SP plans can be community titles schemes (duplex, triplex) with a common
+    // property Lot 0. The code above resolves to an individual unit lot (e.g.
+    // Lot 1, 83m²) which produces a tiny boundary. When the searched address
+    // has no unit prefix, treat the plan as common property so the existing
+    // union logic below returns the full site outline.
+    // Only SP plans can be community titles schemes — skip this check for RP and others
+    if (inputUnitNumber === null && !COMMON_PROPERTY_LOTS.includes(parcelRow.lot) && /^SP\d/i.test(parcelRow.plan)) {
+      const cpCheck = await db.query<{ has_cp: boolean }>(
+        `SELECT EXISTS(
+           SELECT 1 FROM qld_cadastre_parcels
+           WHERE plan = $1 AND lot = '0' AND parcel_typ = 'Lot Type Parcel'
+         ) AS has_cp`,
+        [parcelRow.plan]
+      );
+      if (cpCheck.rows[0]?.has_cp) {
+        parcelRow = { ...parcelRow, lot: "0" };
       }
     }
 

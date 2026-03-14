@@ -91,7 +91,7 @@ export const PLAN_REGISTRATION_INFO: Record<
     description:
       "Body corporate strata title — a unit in an apartment block or multi-dwelling complex. Cannot be further subdivided.",
     subdivisible: false,
-    color: "text-amber-400",
+    color: "text-indigo-400",
   },
   group_title: {
     label: "Group Title Plan",

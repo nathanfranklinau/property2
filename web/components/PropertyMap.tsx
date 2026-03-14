@@ -1083,14 +1083,23 @@ function MapInterior({
     nearbySubdivisionRef.current = [];
     if (!map || !nearbySubdivisions || nearbySubdivisions.length === 0) return;
 
+    const PLAN_COLORS: Record<string, { fill: string; stroke: string }> = {
+      SP:  { fill: "#10B981", stroke: "#34D399" }, // emerald — modern freehold
+      BUP: { fill: "#6366F1", stroke: "#818CF8" }, // indigo  — older strata
+      GTP: { fill: "#F59E0B", stroke: "#FCD34D" }, // amber   — group title
+    };
+    const defaultColor = { fill: "#6366F1", stroke: "#818CF8" };
+
     for (const sub of nearbySubdivisions) {
+      const prefix = sub.plan.match(/^(SP|BUP|GTP)/)?.[1] ?? "";
+      const color = PLAN_COLORS[prefix] ?? defaultColor;
       for (const ring of sub.rings) {
         const path = ring.map(([lat, lng]) => ({ lat, lng }));
         const poly = new google.maps.Polygon({
           paths: path,
-          fillColor: "#6366F1",
+          fillColor: color.fill,
           fillOpacity: 0.35,
-          strokeColor: "#818CF8",
+          strokeColor: color.stroke,
           strokeWeight: 1.5,
           strokeOpacity: 1,
           clickable: true,
@@ -1740,7 +1749,7 @@ export default function PropertyMap({
   onNearbyPlanClick,
 }: PropertyMapProps) {
   return (
-    <APIProvider apiKey={apiKey}>
+    <APIProvider apiKey={apiKey} libraries={["places"]}>
       <div className="relative w-full aspect-[4/3] rounded-xl overflow-hidden border border-zinc-200">
         <Map
           defaultCenter={centroid}
