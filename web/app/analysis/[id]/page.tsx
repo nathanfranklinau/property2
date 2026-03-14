@@ -825,6 +825,7 @@ export default function AnalysisPage() {
                       <circle cx="12" cy="12" r="11" strokeDasharray="3 2" />
                     </svg>
                   }
+                  info={"Nearby properties where the land has been split into 2–6 separate lots — for example, a duplex, two homes built side by side, or a small group of townhouses.\n\nThese show what's already been approved in your area, which is a signal of what council may allow on similar land.\n\nNot included: large housing estates, apartment towers, commercial projects, or properties where multiple people simply share one building without the land being divided."}
                 >
                   {nearbyLoading && !nearbyData ? (
                     <div className="flex items-center gap-2 px-3 py-3">
@@ -863,12 +864,12 @@ export default function AnalysisPage() {
                   </div>
                   {(
                     [
-                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0, prevKey: null },
-                      { label: "2 km – 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000, prevKey: "within_2km" as const },
-                      { label: "5 km – 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000, prevKey: "within_5km" as const },
-                      { label: "10 km – 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000, prevKey: "within_10km" as const },
+                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0 },
+                      { label: "2 km – 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000 },
+                      { label: "5 km – 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000 },
+                      { label: "10 km – 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000 },
                     ]
-                  ).map(({ label, key, maxDist, minDist, prevKey }) => {
+                  ).map(({ label, key, maxDist, minDist }) => {
                     const searchTerm = nearbySearch.trim().toLowerCase();
                     const bandPlans = (nearbyData.plans || []).filter(
                       (p) =>
@@ -880,9 +881,7 @@ export default function AnalysisPage() {
                     );
                     const isExpanded = expandedBands.has(key) || (searchTerm !== "" && bandPlans.length > 0);
                     const allBandVisible = bandPlans.length > 0 && bandPlans.every((p) => visibleNearbyPlans.has(p.plan));
-                    const bandCount = prevKey
-                      ? (nearbyData.counts?.[key] || 0) - (nearbyData.counts?.[prevKey] || 0)
-                      : (nearbyData.counts?.[key] || 0);
+                    const bandCount = nearbyData.counts?.[key] || 0;
                     return (
                       <div key={key}>
                         <div className="flex items-center">
@@ -1197,19 +1196,31 @@ function NavIcon({
 function SidebarSection({
   title,
   icon,
+  info,
   children,
 }: {
   title: string;
   icon: React.ReactNode;
+  info?: string;
   children: React.ReactNode;
 }) {
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="relative group flex items-center gap-2 mb-2">
         <span className="text-zinc-600">{icon}</span>
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
           {title}
         </h3>
+        {info && (
+          <>
+            <button className="w-3.5 h-3.5 rounded-full border border-zinc-700 text-zinc-600 hover:text-zinc-400 hover:border-zinc-500 transition-colors flex items-center justify-center text-[9px] leading-none flex-shrink-0 ml-0.5">
+              i
+            </button>
+            <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-64 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-3 text-[11px] text-zinc-300 leading-relaxed whitespace-pre-line">
+              {info}
+            </div>
+          </>
+        )}
       </div>
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] divide-y divide-white/[0.04]">
         {children}

@@ -354,3 +354,33 @@ Do not create example/demo files (like ModalExample.tsx) in the main codebase un
 ## 10. Always Use the Latest Documentation and Guides
 
 Before any Next.js work, find and read the relevant doc in `node_modules/next/dist/docs/`. Your training data is outdated — the docs are the source of truth.
+
+
+Here’s a **simple instruction block** you can drop into a rules file (Copilot, Cursor, Claude Code, etc.).
+
+---
+
+# Postgres MCP Usage (Read-Only)
+
+Use the **Postgres MCP server** when database data needs to be retrieved from Postgres.
+
+## When to use it
+
+Use the MCP if the task requires:
+
+* Querying data from PostgreSQL
+* Inspecting tables or schemas
+* Counting or aggregating records
+* Checking relationships between tables
+
+## When NOT to use it
+
+```sql
+INSERT
+UPDATE
+DELETE
+CREATE
+ALTER
+DROP
+TRUNCATE
+```

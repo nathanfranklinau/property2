@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
            FILTER (WHERE a.address IS NOT NULL AND a.address != '') AS addresses,
          MIN(ST_Distance(a.geometry::geography, ref.geom::geography)) AS dist_m
        FROM qld_cadastre_address a, ref
-       WHERE a.plan LIKE 'SP%'
+       WHERE (a.plan LIKE 'SP%' OR a.plan LIKE 'BUP%' OR a.plan LIKE 'GTP%')
          AND a.local_authority = ref.lga_name
          AND a.plan != ref.cadastre_plan
          AND ST_DWithin(a.geometry::geography, ref.geom::geography, 20000)
@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
              bool_or(a.unit_number IS NOT NULL AND a.unit_number != '')
              AND COUNT(DISTINCT a.street_no_1) = 1
            )
-           OR COUNT(DISTINCT a.street_no_1 || '-' || a.street_name) < COUNT(DISTINCT a.lot)
+           OR (COUNT(DISTINCT a.address) > 1 AND COUNT(DISTINCT a.street_no_1 || '-' || a.street_name) < COUNT(DISTINCT a.lot))
          )
      )`;
 
@@ -82,10 +82,10 @@ export async function GET(req: NextRequest) {
            HAVING SUM(cp.lot_area) <= 6000
          )
          SELECT
-           COUNT(*) FILTER (WHERE dist_m <= 2000)  AS within_2km,
-           COUNT(*) FILTER (WHERE dist_m <= 5000)  AS within_5km,
-           COUNT(*) FILTER (WHERE dist_m <= 10000) AS within_10km,
-           COUNT(*) FILTER (WHERE dist_m <= 20000) AS within_20km
+           COUNT(*) FILTER (WHERE dist_m <= 2000)                      AS within_2km,
+           COUNT(*) FILTER (WHERE dist_m > 2000  AND dist_m <= 5000)   AS within_5km,
+           COUNT(*) FILTER (WHERE dist_m > 5000  AND dist_m <= 10000)  AS within_10km,
+           COUNT(*) FILTER (WHERE dist_m > 10000 AND dist_m <= 20000)  AS within_20km
          FROM filtered`,
         [parcelId]
       ),
@@ -96,7 +96,7 @@ export async function GET(req: NextRequest) {
            ac.lot_count,
            ac.addresses,
            ac.dist_m,
-           SUM(cp.lot_area)        AS total_area_sqm,
+           ROUND(ST_Area(ST_Union(cp.geometry)::geography)::numeric) AS total_area_sqm,
            ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
            ST_Y(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lat,
            ST_X(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lon
@@ -123,14 +123,14 @@ export async function GET(req: NextRequest) {
 
     // Parse GeoJSON boundaries into [lat, lng] coordinate arrays
     const plans = result.rows.map((row) => {
-      const geo = JSON.parse(row.boundary_geojson);
+      const geo = row.boundary_geojson ? JSON.parse(row.boundary_geojson) : null;
       let rings: [number, number][][] = [];
 
-      if (geo.type === "MultiPolygon") {
+      if (geo && geo.type === "MultiPolygon") {
         rings = (geo.coordinates as number[][][][]).map((poly) =>
           poly[0].map(([lon, lat]) => [lat, lon] as [number, number])
         );
-      } else if (geo.type === "Polygon") {
+      } else if (geo && geo.type === "Polygon") {
         rings = [(geo.coordinates as number[][][])[0].map(([lon, lat]) => [lat, lon] as [number, number])];
       }
 

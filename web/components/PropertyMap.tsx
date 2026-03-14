@@ -379,6 +379,24 @@ function makeLabelIcon(text: string, colour: string): google.maps.Icon {
   };
 }
 
+/** Build a Google Maps icon showing the block area (total_area_sqm) of a nearby subdivision. */
+function makeAreaLabelIcon(areaSqm: number): google.maps.Icon {
+  const text = areaSqm >= 10000
+    ? `${(areaSqm / 10000).toFixed(2)} ha`
+    : `${Math.round(areaSqm).toLocaleString()} m²`;
+  const pillW = Math.ceil(text.length * 6.5 + 16);
+  const pillH = 18;
+  const S = pillW + 4;
+  const cx = S / 2;
+  const cy = pillH / 2 + 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${pillH + 4}"><rect x="2" y="2" width="${pillW}" height="${pillH}" rx="${pillH / 2}" fill="#4F46E5" fill-opacity="0.9"/><text x="${cx}" y="${cy + 4.5}" font-family="-apple-system,BlinkMacSystemFont,Helvetica,sans-serif" font-size="10" font-weight="700" letter-spacing="0.02em" fill="white" text-anchor="middle">${text}</text></svg>`;
+  return {
+    url: `data:image/svg+xml,${encodeURIComponent(svg)}`,
+    scaledSize: new google.maps.Size(S, pillH + 4),
+    anchor: new google.maps.Point(cx, cy),
+  };
+}
+
 /** Build a Google Maps icon for a measurement label rotated to align with an edge. */
 function makeMeasurementIcon(distM: number, angleDeg: number): google.maps.Icon {
   const text = distM >= 10 ? `${Math.round(distM)}m` : `${distM.toFixed(1)}m`;
@@ -534,6 +552,9 @@ function MapToolbar({
   onToggleBuffer,
   showMeasurements,
   onToggleMeasurements,
+  hasNearbySubdivisions,
+  showSubdivisionLabels,
+  onToggleSubdivisionLabels,
 }: {
   mode: DrawMode;
   setMode: (m: DrawMode) => void;
@@ -549,6 +570,9 @@ function MapToolbar({
   onToggleBuffer: () => void;
   showMeasurements: boolean;
   onToggleMeasurements: () => void;
+  hasNearbySubdivisions: boolean;
+  showSubdivisionLabels: boolean;
+  onToggleSubdivisionLabels: () => void;
 }) {
   return (
     <div className="absolute top-3 left-3 z-10 flex items-center gap-1 bg-white/95 backdrop-blur rounded-lg shadow-lg px-1.5 py-1 border border-zinc-200">
@@ -678,6 +702,22 @@ function MapToolbar({
           <line x1="14" y1="7" x2="14" y2="10" />
         </svg>
       </ToolBtn>
+
+      {hasNearbySubdivisions && (
+        <>
+          <Sep />
+          <ToolBtn active={showSubdivisionLabels} onClick={onToggleSubdivisionLabels} title={showSubdivisionLabels ? "Hide block sizes" : "Show block sizes"}>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="3" width="11" height="11" rx="1" />
+              <line x1="15" y1="7" x2="18" y2="7" />
+              <line x1="15" y1="10" x2="17" y2="10" />
+              <line x1="5" y1="17" x2="15" y2="17" />
+              <line x1="5" y1="17" x2="5" y2="15" />
+              <line x1="15" y1="17" x2="15" y2="15" />
+            </svg>
+          </ToolBtn>
+        </>
+      )}
     </div>
   );
 }
@@ -771,6 +811,7 @@ function MapInterior({
   const [drawingVertices, setDrawingVertices] = useState<LatLng[]>([]);
   const [rectFirstCorner, setRectFirstCorner] = useState<LatLng | null>(null);
   const [showMeasurements, setShowMeasurements] = useState(false);
+  const [showSubdivisionLabels, setShowSubdivisionLabels] = useState(false);
   const [nearbyInfoWindow, setNearbyInfoWindow] = useState<{
     plan: string;
     addresses: string[];
@@ -798,6 +839,7 @@ function MapInterior({
   const mapDblClickListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const encumbrancePolysRef = useRef<google.maps.Polygon[]>([]);
   const encumbranceLabelMarkersRef = useRef<google.maps.Marker[]>([]);
+  const subdivisionLabelMarkersRef = useRef<google.maps.Marker[]>([]);
 
   const boundaryPath = useMemo(
     () => boundaryCoords.map(([lat, lng]) => ({ lat, lng })),
@@ -1092,6 +1134,29 @@ function MapInterior({
       nearbySubdivisionRef.current = [];
     };
   }, [map, nearbySubdivisions, onNearbyPlanClick]);
+
+  // ── Nearby subdivision area labels ────────────────────────────────────
+  useEffect(() => {
+    for (const m of subdivisionLabelMarkersRef.current) m.setMap(null);
+    subdivisionLabelMarkersRef.current = [];
+    if (!map || !showSubdivisionLabels || !nearbySubdivisions || nearbySubdivisions.length === 0) return;
+
+    for (const sub of nearbySubdivisions) {
+      const marker = new google.maps.Marker({
+        position: sub.centroid,
+        icon: makeAreaLabelIcon(sub.total_area_sqm),
+        clickable: false,
+        zIndex: 5,
+        map,
+      });
+      subdivisionLabelMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      for (const m of subdivisionLabelMarkersRef.current) m.setMap(null);
+      subdivisionLabelMarkersRef.current = [];
+    };
+  }, [map, nearbySubdivisions, showSubdivisionLabels]);
 
   // ── Nearby subdivision InfoWindow ──────────────────────────────────────
   useEffect(() => {
@@ -1653,6 +1718,9 @@ function MapInterior({
       onToggleBuffer={handleToggleBuffer}
       showMeasurements={showMeasurements}
       onToggleMeasurements={() => setShowMeasurements((v) => !v)}
+      hasNearbySubdivisions={(nearbySubdivisions?.length ?? 0) > 0}
+      showSubdivisionLabels={showSubdivisionLabels}
+      onToggleSubdivisionLabels={() => setShowSubdivisionLabels((v) => !v)}
     />
   );
 }
