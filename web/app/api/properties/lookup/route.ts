@@ -207,6 +207,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // ── BUP/GTP: show full complex when no unit prefix specified ─────────────
+    // BUP (Building Unit Plan) and GTP (Group Titles Plan) are multi-unit
+    // complexes. When no unit number is given, show the whole site rather than
+    // a single unit lot. Trigger the union pathway the same way SP does (lot "0"
+    // acts as the trigger; the actual union query doesn't require lot 0 to exist).
+    if (inputUnitNumber === null && !COMMON_PROPERTY_LOTS.includes(parcelRow.lot) && /^(BUP|GTP)\d/i.test(parcelRow.plan)) {
+      parcelRow = { ...parcelRow, lot: "0" };
+    }
+
     const isCommonProperty = COMMON_PROPERTY_LOTS.includes(parcelRow.lot);
 
     // If the point landed on a common property lot (e.g. strata building lobby),
@@ -239,7 +248,9 @@ export async function GET(req: NextRequest) {
     }
 
     const planPrefix = extractPlanPrefix(parcelRow.plan);
-    const needsComplexBoundary = isCommonProperty || planPrefix === "BUP" || planPrefix === "GTP";
+    // Only fetch the complex overlay for individual BUP/GTP lots — when the
+    // main boundary is already the full COMPLEX union, the overlay is redundant.
+    const needsComplexBoundary = !isCommonProperty && (planPrefix === "BUP" || planPrefix === "GTP");
 
     // ── Step 3: Parallel enrichment ──────────────────────────────────────────
     const [lgaResult, zoneResult, complexResult, addressResult] = await Promise.all([

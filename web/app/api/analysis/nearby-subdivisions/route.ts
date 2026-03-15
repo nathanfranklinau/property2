@@ -66,6 +66,7 @@ export async function GET(req: NextRequest) {
              AND COUNT(DISTINCT a.street_no_1) = 1
            )
            OR (COUNT(DISTINCT a.address) > 1 AND COUNT(DISTINCT a.street_no_1 || '-' || a.street_name) < COUNT(DISTINCT a.lot))
+           OR bool_or(a.lot = '9999')
          )
      )`;
 

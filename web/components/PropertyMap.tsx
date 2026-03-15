@@ -1072,8 +1072,7 @@ function MapInterior({
   useEffect(() => {
     if (!map || !focusedNearbyPlan) return;
     map.panTo(focusedNearbyPlan);
-    const currentZoom = map.getZoom();
-    if (currentZoom != null && currentZoom > 17) map.setZoom(17);
+    map.setZoom(19);
   }, [map, focusedNearbyPlan]);
 
   // ── Render nearby subdivision boundaries ──────────────────────────────
