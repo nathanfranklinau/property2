@@ -26,6 +26,7 @@ type NearbyPlanRow = {
   boundary_geojson: string;
   centroid_lat: string;
   centroid_lon: string;
+  zone_name: string | null;
 };
 
 export async function GET(req: NextRequest) {
@@ -91,21 +92,35 @@ export async function GET(req: NextRequest) {
         [parcelId]
       ),
       db.query<NearbyPlanRow>(
-        `WITH ${sharedCte}
+        `WITH ${sharedCte},
+         plan_geom AS (
+           SELECT
+             ac.plan,
+             ac.lot_count,
+             ac.addresses,
+             ac.dist_m,
+             ROUND(ST_Area(ST_Union(cp.geometry)::geography)::numeric) AS total_area_sqm,
+             ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
+             ST_Centroid(ST_Union(cp.geometry)) AS centroid
+           FROM addr_candidates ac
+           JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
+           GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
+           HAVING SUM(cp.lot_area) <= 6000
+         )
          SELECT
-           ac.plan,
-           ac.lot_count,
-           ac.addresses,
-           ac.dist_m,
-           ROUND(ST_Area(ST_Union(cp.geometry)::geography)::numeric) AS total_area_sqm,
-           ST_AsGeoJSON(ST_Simplify(ST_Union(cp.geometry), 0.00005)) AS boundary_geojson,
-           ST_Y(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lat,
-           ST_X(ST_Centroid(ST_Union(cp.geometry))) AS centroid_lon
-         FROM addr_candidates ac
-         JOIN qld_cadastre_parcels cp ON cp.plan = ac.plan
-         GROUP BY ac.plan, ac.lot_count, ac.addresses, ac.dist_m
-         HAVING SUM(cp.lot_area) <= 6000
-         ORDER BY ac.dist_m`,
+           pg.plan, pg.lot_count, pg.addresses, pg.dist_m,
+           pg.total_area_sqm, pg.boundary_geojson,
+           ST_Y(pg.centroid) AS centroid_lat,
+           ST_X(pg.centroid) AS centroid_lon,
+           z.lvl1_zone AS zone_name
+         FROM plan_geom pg
+         LEFT JOIN LATERAL (
+           SELECT gz.lvl1_zone
+           FROM qld_goldcoast_zones gz
+           WHERE ST_Intersects(gz.geometry, pg.centroid)
+           LIMIT 1
+         ) z ON true
+         ORDER BY pg.dist_m`,
         [parcelId]
       ),
     ]);
@@ -143,6 +158,7 @@ export async function GET(req: NextRequest) {
         distance_m: Math.round(Number(row.dist_m)),
         centroid: { lat: Number(row.centroid_lat), lng: Number(row.centroid_lon) },
         boundary_coords: rings,
+        zone_name: row.zone_name ?? null,
       };
     });
 

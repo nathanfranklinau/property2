@@ -35,9 +35,12 @@ const COLORS = {
 
 export default function DebugLookupPage() {
   const [address, setAddress] = useState("");
+  const [lot, setLot] = useState("");
+  const [plan, setPlan] = useState("");
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<DebugData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [planResults, setPlanResults] = useState<{ lot: string; plan: string; parcel_typ: string; locality: string; lot_area_sqm: number | null; sample_address: string | null; centroid_lat: number | null; centroid_lon: number | null; geometry: GeomEntry["geometry"] | null }[] | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const overlaysRef = useRef<(google.maps.Marker | google.maps.Polygon | google.maps.Rectangle)[]>([]);
@@ -390,7 +393,7 @@ export default function DebugLookupPage() {
     }
   }, [clearOverlays]);
 
-  // Fetch debug data
+  // Fetch debug data by address
   const doLookup = useCallback(async () => {
     if (!address.trim()) return;
     setLoading(true);
@@ -409,13 +412,94 @@ export default function DebugLookupPage() {
     }
   }, [address, plotData]);
 
+  // Plot plan search results — draw each lot boundary on the map
+  const plotPlanResults = useCallback((results: NonNullable<typeof planResults>) => {
+    clearOverlays();
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const bounds = new google.maps.LatLngBounds();
+    const palette = ["#4488FF", "#FF8844", "#44FF88", "#FF44CC", "#FFD700", "#00FFFF", "#FF4444", "#88FF44"];
+    results.forEach((r, i) => {
+      const color = palette[i % palette.length];
+      if (r.geometry) {
+        addPolygon(r.geometry, color, `Lot ${r.lot}/${r.plan}`);
+        // Extend bounds with all coordinates
+        const rings =
+          r.geometry.type === "MultiPolygon"
+            ? (r.geometry.coordinates as number[][][][]).flatMap((p) => p)
+            : (r.geometry.coordinates as number[][][]);
+        rings[0]?.forEach(([lng, lat]) => bounds.extend({ lat, lng }));
+      } else if (r.centroid_lat && r.centroid_lon) {
+        addMarker(r.centroid_lat, r.centroid_lon, `Lot ${r.lot}/${r.plan}`, color, r.lot);
+        bounds.extend({ lat: r.centroid_lat, lng: r.centroid_lon });
+      }
+    });
+    if (!bounds.isEmpty()) map.fitBounds(bounds, 40);
+  }, [clearOverlays]);
+
+  // Fetch debug data by lot/plan (or plan-only search)
+  const doLotPlanLookup = useCallback(async () => {
+    if (!plan.trim()) return;
+    setLoading(true);
+    setError(null);
+    setData(null);
+    setPlanResults(null);
+
+    try {
+      const url = lot.trim()
+        ? `/api/debug/lookup?lot=${encodeURIComponent(lot.trim())}&plan=${encodeURIComponent(plan.trim().toUpperCase())}`
+        : `/api/debug/lookup?plan=${encodeURIComponent(plan.trim().toUpperCase())}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.mode === "plan_search") {
+        if (json.results?.length === 1) {
+          // Single result — load it directly
+          const r = json.results[0];
+          setLot(r.lot);
+          const res2 = await fetch(`/api/debug/lookup?lot=${encodeURIComponent(r.lot)}&plan=${encodeURIComponent(r.plan)}`);
+          const json2 = await res2.json();
+          setData(json2);
+          plotData(json2);
+        } else {
+          setPlanResults(json.results);
+          plotPlanResults(json.results);
+        }
+      } else {
+        setData(json);
+        plotData(json);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [lot, plan, plotData, plotPlanResults]);
+
+  const selectPlanResult = useCallback(async (selectedLot: string, selectedPlan: string) => {
+    setLot(selectedLot);
+    setPlanResults(null);
+    setLoading(true);
+    setError(null);
+    setData(null);
+    try {
+      const res = await fetch(`/api/debug/lookup?lot=${encodeURIComponent(selectedLot)}&plan=${encodeURIComponent(selectedPlan)}`);
+      const json = await res.json();
+      setData(json);
+      plotData(json);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [plotData]);
+
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "monospace", fontSize: 13 }}>
       {/* Left panel — controls + debug JSON */}
       <div style={{ width: 480, overflow: "auto", padding: 12, background: "#1a1a2e", color: "#eee" }}>
         <h2 style={{ margin: "0 0 12px", fontSize: 16 }}>Debug Lookup</h2>
 
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
           <input
             ref={inputRef}
             type="text"
@@ -438,6 +522,43 @@ export default function DebugLookupPage() {
             }}
           >
             {loading ? "..." : "Lookup"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
+          <span style={{ color: "#666", fontSize: 11, whiteSpace: "nowrap" }}>or lot/plan:</span>
+          <input
+            type="text"
+            value={lot}
+            onChange={(e) => setLot(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && doLotPlanLookup()}
+            placeholder="Lot (optional)"
+            style={{
+              width: 90, padding: "6px 8px", borderRadius: 4, border: "1px solid #444",
+              background: "#0f0f23", color: "#eee", fontSize: 13,
+            }}
+          />
+          <input
+            type="text"
+            value={plan}
+            onChange={(e) => setPlan(e.target.value.toUpperCase())}
+            onKeyDown={(e) => e.key === "Enter" && doLotPlanLookup()}
+            placeholder="Plan (e.g. SP123456)"
+            style={{
+              flex: 1, padding: "6px 8px", borderRadius: 4, border: "1px solid #444",
+              background: "#0f0f23", color: "#eee", fontSize: 13,
+            }}
+          />
+          <button
+            onClick={doLotPlanLookup}
+            disabled={loading || !plan.trim()}
+            style={{
+              padding: "6px 14px", borderRadius: 4, border: "none",
+              background: (loading || !plan.trim()) ? "#555" : "#006633", color: "#fff",
+              cursor: (loading || !plan.trim()) ? "not-allowed" : "pointer", fontSize: 13,
+            }}
+          >
+            {loading ? "..." : "Search"}
           </button>
           {data && (
             <>
@@ -503,22 +624,49 @@ export default function DebugLookupPage() {
 
         {error && <div style={{ color: "#f66", marginBottom: 8 }}>Error: {error}</div>}
 
+        {planResults && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: "#aaa", fontSize: 11, marginBottom: 6 }}>
+              {planResults.length} lots found on {plan} — click to load:
+            </div>
+            {planResults.map((r) => (
+              <div
+                key={`${r.lot}/${r.plan}`}
+                onClick={() => selectPlanResult(r.lot, r.plan)}
+                style={{
+                  padding: "6px 8px", marginBottom: 3, borderRadius: 3,
+                  background: "#0f0f23", border: "1px solid #333",
+                  cursor: "pointer", display: "flex", gap: 10, alignItems: "baseline",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#1a2a3a")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "#0f0f23")}
+              >
+                <span style={{ color: "#8bf", fontWeight: "bold", minWidth: 70 }}>Lot {r.lot}</span>
+                <span style={{ color: "#888", fontSize: 11 }}>{r.parcel_typ}</span>
+                {r.lot_area_sqm && <span style={{ color: "#8f8" }}>{r.lot_area_sqm.toLocaleString()} m²</span>}
+                {r.sample_address && <span style={{ color: "#aaa", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.sample_address}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
         {data && (
           <div>
             {/* Summary */}
-            <Section title="Parsed Address" data={data.parsed} />
-            <Section title="GNAF Matches" data={data.gnaf} />
-            <Section title="GNAF Point" data={data.gnafPoint} />
-            <Section title="GNAF Geocodes (all types)" data={data.gnafGeocodes} />
-            <Section title="ST_Contains Parcels" data={data.cadastreSpatialContains} />
-            <Section title="ST_DWithin Parcels" data={data.cadastreDWithin} />
-            <Section title="Refinement Input" data={data.refinementInput} />
-            <Section title="Address Refinement" data={data.addressRefinement} />
-            <Section title="Cadastre Address (direct lookup)" data={data.cadastreAddressDirect} />
-            <Section title="All Addresses on Plan" data={data.allAddressesOnPlan} collapsed />
-            <Section title="LGA" data={data.lga} />
-            <Section title="Zoning" data={data.zoning} />
-            <Section title="Raw Validation Response" data={data.addressValidation} collapsed />
+            <Section title="Parsed Address" objKey="parsed" data={data.parsed} />
+            <Section title="GNAF Matches" objKey="gnaf" data={data.gnaf} />
+            <Section title="GNAF Point" objKey="gnafPoint" data={data.gnafPoint} />
+            <Section title="GNAF Geocodes (all types)" objKey="gnafGeocodes" data={data.gnafGeocodes} />
+            <Section title="ST_Contains Parcels" objKey="cadastreSpatialContains" data={data.cadastreSpatialContains} />
+            <Section title="ST_DWithin Parcels" objKey="cadastreDWithin" data={data.cadastreDWithin} />
+            <Section title="Refinement Input" objKey="refinementInput" data={data.refinementInput} />
+            <Section title="Address Refinement" objKey="addressRefinement" data={data.addressRefinement} />
+            <Section title="Cadastre Address (direct lookup)" objKey="cadastreAddressDirect" data={data.cadastreAddressDirect} />
+            <Section title="All Parcels for Lot/Plan" objKey="allPiecesForMatchedLot" data={data.allPiecesForMatchedLot} collapsed />
+            <Section title="All Addresses on Plan" objKey="allAddressesOnPlan" data={data.allAddressesOnPlan} collapsed />
+            <Section title="LGA" objKey="lga" data={data.lga} />
+            <Section title="Zoning" objKey="zoning" data={data.zoning} />
+            <Section title="Raw Validation Response" objKey="addressValidation" data={data.addressValidation} collapsed />
           </div>
         )}
       </div>
@@ -531,7 +679,7 @@ export default function DebugLookupPage() {
 
 // ─── Collapsible JSON section ────────────────────────────────────────────────
 
-function Section({ title, data, collapsed = false }: { title: string; data: unknown; collapsed?: boolean }) {
+function Section({ title, objKey, data, collapsed = false }: { title: string; objKey?: string; data: unknown; collapsed?: boolean }) {
   const [open, setOpen] = useState(!collapsed);
   if (data === undefined || data === null) return null;
 
@@ -543,6 +691,7 @@ function Section({ title, data, collapsed = false }: { title: string; data: unkn
       >
         {open ? "▾" : "▸"} {title}
         {Array.isArray(data) && <span style={{ color: "#888" }}> ({data.length})</span>}
+        {objKey && <span style={{ color: "#555", fontWeight: "normal", fontSize: 11, marginLeft: 6 }}>.{objKey}</span>}
       </div>
       {open && (
         <pre style={{

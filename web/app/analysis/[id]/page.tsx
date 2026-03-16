@@ -53,6 +53,27 @@ type AnalysisStatus = {
   tenure_type: string | null;
 };
 
+type CityPlanData = {
+  zone: {
+    lvl1_zone: string;
+    zone: string;
+    zone_precinct: string | null;
+    building_height: string | null;
+    bh_category: string | null;
+  } | null;
+  building_height: {
+    height_in_metres: string;
+    storey_number: string;
+    height_label: string;
+  } | null;
+  bushfire_hazard: { level: string } | null;
+  dwelling_house_overlay: boolean;
+  minimum_lot_size: { mls: string } | null;
+  airport_noise: { sensitive_use_type: string; buffer_source: string } | null;
+  residential_density: { code: string } | null;
+  buffer_area: boolean;
+};
+
 type NearbyPlan = {
   plan: string;
   addresses: string[];
@@ -61,6 +82,7 @@ type NearbyPlan = {
   distance_m: number;
   centroid: { lat: number; lng: number };
   boundary_coords: [number, number][][];
+  zone_name: string | null;
 };
 
 type Stage = "queuing" | "imagery" | "analysing" | "complete" | "failed";
@@ -177,6 +199,269 @@ const UNIT_TYPE_LABELS: Record<string, string> = {
   LOT: "Lot",
 };
 
+// ─── City Plan helpers ───────────────────────────────────────────────────
+
+function zoneColor(lvl1: string): string {
+  const z = lvl1.toLowerCase();
+  if (z.includes("low density res"))    return "bg-emerald-500/15 text-emerald-400";
+  if (z.includes("medium density res")) return "bg-blue-500/15 text-blue-400";
+  if (z.includes("high density res"))   return "bg-indigo-500/15 text-indigo-400";
+  if (z.includes("rural res"))          return "bg-lime-500/15 text-lime-400";
+  if (z.includes("rural"))              return "bg-amber-500/15 text-amber-400";
+  if (z.includes("conservation"))       return "bg-green-500/15 text-green-400";
+  if (z.includes("centre"))             return "bg-purple-500/15 text-purple-400";
+  if (z.includes("mixed use"))          return "bg-cyan-500/15 text-cyan-400";
+  if (z.includes("waterfront"))         return "bg-sky-500/15 text-sky-400";
+  if (z.includes("extractive"))         return "bg-stone-500/15 text-stone-400";
+  if (z.includes("high impact"))        return "bg-red-500/15 text-red-400";
+  if (z.includes("medium impact"))      return "bg-orange-500/15 text-orange-400";
+  if (z.includes("low impact"))         return "bg-yellow-500/15 text-yellow-400";
+  if (z.includes("open space"))         return "bg-teal-500/15 text-teal-400";
+  if (z.includes("sport"))             return "bg-teal-500/15 text-teal-400";
+  if (z.includes("community"))          return "bg-pink-500/15 text-pink-400";
+  if (z.includes("township"))           return "bg-yellow-500/15 text-yellow-400";
+  if (z.includes("innovation"))         return "bg-violet-500/15 text-violet-400";
+  if (z.includes("emerging"))           return "bg-sky-500/15 text-sky-400";
+  if (z.includes("tourism"))            return "bg-rose-500/15 text-rose-400";
+  if (z.includes("special"))            return "bg-fuchsia-500/15 text-fuchsia-400";
+  if (z.includes("limited"))            return "bg-zinc-500/15 text-zinc-400";
+  if (z.includes("unzoned"))            return "bg-zinc-500/15 text-zinc-500";
+  return "bg-white/[0.08] text-zinc-300";
+}
+
+/** Returns an inline SVG icon specific to the Gold Coast zone type */
+function zoneIcon(lvl1: string): React.ReactNode {
+  const z = lvl1.toLowerCase();
+  const cls = "w-3.5 h-3.5 flex-shrink-0";
+
+  // Low density residential — single house with pitched roof
+  if (z.includes("low density res")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M4 12l8-7 8 7" /><path d="M6 10.5v9h12v-9" /><path d="M10 19.5v-5h4v5" />
+    </svg>
+  );
+  // Medium density residential — duplex / side-by-side houses
+  if (z.includes("medium density res")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 13l5-5 4 4 4-4 5 5" /><path d="M5 12v8h6v-8" /><path d="M13 12v8h6v-8" />
+      <path d="M7 16h2M15 16h2" />
+    </svg>
+  );
+  // High density residential — tall apartment tower
+  if (z.includes("high density res")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="6" y="3" width="12" height="18" rx="1" /><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2" />
+      <path d="M10 21v-3h4v3" />
+    </svg>
+  );
+  // Rural residential — house with fence and tree
+  if (z.includes("rural res")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 14l5-5 5 5" /><path d="M5 13v7h8v-7" /><path d="M8 20v-3h2v3" />
+      <circle cx="19" cy="9" r="3" /><path d="M19 12v8" /><path d="M15 20h8" />
+    </svg>
+  );
+  // Rural — wheat/crop field
+  if (z.includes("rural")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 21V8" /><path d="M8 10c2-2 4 0 4 0s2-2 4 0" />
+      <path d="M7 7c2.5-3 5 0 5 0s2.5-3 5 0" /><path d="M9 4c1.5-2 3 0 3 0s1.5-2 3 0" />
+      <path d="M3 21h18" />
+    </svg>
+  );
+  // Conservation — leaf inside shield
+  if (z.includes("conservation")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 3C8 7 5 10 5 14c0 4 3.5 7 7 7s7-3 7-7c0-4-3-7-7-11z" />
+      <path d="M12 21c0-5 4-8 4-8" /><path d="M12 17c-2-2-3-5-1-8" />
+    </svg>
+  );
+  // Open space — tree in park
+  if (z.includes("open space")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="12" cy="8" r="5" /><path d="M12 13v8" /><path d="M7 21h10" />
+      <path d="M9 11l3 2 3-2" />
+    </svg>
+  );
+  // Centre — city skyline
+  if (z.includes("centre") && !z.includes("neighbour")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="3" y="10" width="5" height="11" rx="0.5" /><rect x="10" y="4" width="5" height="17" rx="0.5" />
+      <rect x="17" y="7" width="5" height="14" rx="0.5" /><path d="M4.5 14h2M11.5 8h2M18.5 11h2M11.5 12h2" />
+    </svg>
+  );
+  // Neighbourhood centre — shopfront with awning
+  if (z.includes("neighbour")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 10l2-6h14l2 6" /><path d="M3 10c0 2 1.5 2 3 2s3 0 3-2" /><path d="M9 10c0 2 1.5 2 3 2s3 0 3-2" />
+      <path d="M15 10c0 2 1.5 2 3 2s3 0 3-2" /><path d="M4 12v9h16v-9" /><path d="M9 21v-5h6v5" />
+    </svg>
+  );
+  // Mixed use — building: shop ground floor + residential above
+  if (z.includes("mixed use")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="4" y="3" width="16" height="18" rx="1" /><path d="M4 14h16" />
+      <path d="M8 7h3M13 7h3M8 10h3M13 10h3" /><path d="M8 17h2v4h-2zM14 17h2v4h-2z" />
+    </svg>
+  );
+  // Community facilities — people group
+  if (z.includes("community")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="8" cy="7" r="2.5" /><circle cx="16" cy="7" r="2.5" />
+      <path d="M3 21c0-3.5 2.5-6 5-6s5 2.5 5 6" /><path d="M13 21c0-3.5 2-6 3-6" />
+      <path d="M11 21c0-3.5 2.5-6 5-6s5 2.5 5 6" />
+    </svg>
+  );
+  // Township — cluster of small buildings
+  if (z.includes("township")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M2 15l4-4 4 4" /><path d="M4 14v7h4v-7" />
+      <path d="M10 12l4-5 4 5" /><path d="M12 11v10h4v-10" />
+      <path d="M18 15l3-3 1 1" /><path d="M19 14v7h3v-7" />
+    </svg>
+  );
+  // Innovation — lightbulb with gear
+  if (z.includes("innovation")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M9 18h6M10 21h4" /><path d="M12 2a7 7 0 00-4 12.7V17h8v-2.3A7 7 0 0012 2z" />
+      <path d="M12 6v4l2 2" />
+    </svg>
+  );
+  // Sport and recreation — running figure
+  if (z.includes("sport")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="14" cy="4" r="2" /><path d="M8 21l2-7 4 2v-5l3-3" />
+      <path d="M10 14l-4-2" /><path d="M16 11l2 3h3" />
+    </svg>
+  );
+  // Emerging community — seedling sprouting
+  if (z.includes("emerging")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 21v-9" /><path d="M12 12c-3 0-6-3-6-6 3 0 6 3 6 6z" />
+      <path d="M12 12c3 0 6-4 6-7-3 0-6 4-6 7z" /><path d="M7 21h10" />
+    </svg>
+  );
+  // Special purpose — star badge
+  if (z.includes("special")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26" />
+    </svg>
+  );
+  // Major tourism — palm tree
+  if (z.includes("tourism")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M13 21V10" /><path d="M13 10c-4-1-7 2-10 1 3-3 5-6 10-5" />
+      <path d="M13 10c4-1 7 2 10 1-3-3-5-6-10-5" /><path d="M13 7c1-4 4-5 6-5-1 3-3 5-6 5z" />
+      <path d="M8 21h10" />
+    </svg>
+  );
+  // Waterfront and marine industry — anchor
+  if (z.includes("waterfront")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="12" cy="5" r="2" /><path d="M12 7v13" /><path d="M8 11h8" />
+      <path d="M5 18c0-4 3.5-7 7-7s7 3 7 7" /><path d="M5 18h14" />
+    </svg>
+  );
+  // Extractive industry — pickaxe
+  if (z.includes("extractive")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M14 4l6 6-2 2-6-6" /><path d="M6 18L14 10" /><path d="M4 20l2-2" />
+      <path d="M18 4c0 0 2 0 2 2" /><path d="M3 21h8" /><path d="M11 21v-4" />
+    </svg>
+  );
+  // High impact industry — factory with smoke stacks
+  if (z.includes("high impact")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M4 21V11l5 3V9l5 3V8l6 4v9" /><path d="M4 21h16" />
+      <path d="M17 8V4" /><path d="M17 4c0-1 1-2 2-1" /><path d="M14 8V5" /><path d="M14 5c0-1 1-2 2-1" />
+    </svg>
+  );
+  // Medium impact industry — factory with chimney
+  if (z.includes("medium impact")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M4 21V11l5 3V9l5 3v9" /><path d="M14 21h6V12l-6 3" /><path d="M4 21h16" />
+      <path d="M18 12V7" /><path d="M18 7c0-1 1-1.5 1.5-0.5" />
+    </svg>
+  );
+  // Low impact industry — warehouse
+  if (z.includes("low impact")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 12l9-6 9 6" /><path d="M5 11v10h14V11" />
+      <path d="M9 21v-5h6v5" /><path d="M9 13h6" />
+    </svg>
+  );
+  // Limited development — lock/restricted
+  if (z.includes("limited")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="5" y="11" width="14" height="10" rx="1.5" /><path d="M8 11V7a4 4 0 018 0v4" />
+      <circle cx="12" cy="16" r="1.5" /><path d="M12 17.5V19" />
+    </svg>
+  );
+  // Unzoned — question mark
+  if (z.includes("unzoned")) return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="12" cy="12" r="9" /><path d="M9 9c0-1.7 1.3-3 3-3s3 1.3 3 3-1.5 2-3 3v1" />
+      <circle cx="12" cy="18" r="0.5" fill="currentColor" />
+    </svg>
+  );
+  // Fallback — generic map pin
+  return (
+    <svg className={cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 22c1-4 6-7 6-12a6 6 0 10-12 0c0 5 5 8 6 12z" />
+      <circle cx="12" cy="10" r="2" />
+    </svg>
+  );
+}
+
+function heightColor(h: string): string {
+  if (h === "HX") return "text-violet-400";
+  const m = parseFloat(h);
+  if (isNaN(m)) return "text-zinc-300";
+  if (m <= 9)  return "text-emerald-400";
+  if (m <= 15) return "text-teal-400";
+  if (m <= 25) return "text-blue-400";
+  if (m <= 40) return "text-indigo-400";
+  return "text-purple-400";
+}
+
+function densityColor(code: string): string {
+  if (code.startsWith("LDR")) return "text-emerald-400";
+  const n = parseInt(code.replace("RD", "").replace("A", ""));
+  if (isNaN(n)) return "text-zinc-300";
+  if (n <= 2) return "text-emerald-400";
+  if (n <= 4) return "text-teal-400";
+  if (n <= 6) return "text-blue-400";
+  return "text-indigo-400";
+}
+
+function bushfireIconColor(level: string): string {
+  if (level.includes("Very High")) return "text-red-500";
+  if (level.includes("High"))      return "text-orange-500";
+  if (level.includes("Medium"))    return "text-amber-500";
+  return "text-yellow-500";
+}
+
+function bushfireTextColor(level: string): string {
+  if (level.includes("Very High")) return "text-red-400";
+  if (level.includes("High"))      return "text-orange-400";
+  if (level.includes("Medium"))    return "text-amber-400";
+  return "text-yellow-400";
+}
+
+function bushfireBadge(level: string): string {
+  if (level.includes("Very High")) return "bg-red-500/20 text-red-400";
+  if (level.includes("High"))      return "bg-orange-500/20 text-orange-400";
+  if (level.includes("Medium"))    return "bg-amber-500/20 text-amber-400";
+  return "bg-yellow-500/20 text-yellow-400";
+}
+
+function bushfireSeverity(level: string): string {
+  if (level.includes("Very High")) return "Very High";
+  if (level.includes("High"))      return "High";
+  if (level.includes("Medium"))    return "Medium";
+  return "Buffer";
+}
+
 // ─── Tab definitions ──────────────────────────────────────────────────────
 
 type TabId = "free-space" | "buildings" | "plots" | "easements" | "boundaries" | "subdivision";
@@ -272,6 +557,7 @@ export default function AnalysisPage() {
   const [addressesOpen, setAddressesOpen] = useState(false);
   const [unitAddresses, setUnitAddresses] = useState<string[] | null>(null);
   const [unitAddressesLoading, setUnitAddressesLoading] = useState(false);
+  const [cityPlan, setCityPlan] = useState<CityPlanData | null>(null);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -366,6 +652,12 @@ export default function AnalysisPage() {
       if (stage === "complete" || stage === "failed") {
         if (intervalRef.current) clearInterval(intervalRef.current);
         if (stage === "complete") {
+          // Fetch City Plan data (Gold Coast only — API returns null for other LGAs)
+          fetch(`/api/analysis/cityplan?parcel_id=${encodeURIComponent(parcelId)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((d) => { if (d) setCityPlan(d); })
+            .catch(() => {});
+
           setNearbyLoading(true);
           fetch(`/api/analysis/nearby-subdivisions?parcel_id=${encodeURIComponent(parcelId)}`)
             .then((r) => {
@@ -873,6 +1165,138 @@ export default function AnalysisPage() {
 
 
 
+              {/* City Plan Insights (Gold Coast only) */}
+              {cityPlan && (
+                <>
+                  {/* Development Controls */}
+                  {(cityPlan.zone || cityPlan.building_height || cityPlan.minimum_lot_size || cityPlan.residential_density) && (
+                    <SidebarSection
+                      title="Development Controls"
+                      icon={<RulerIcon />}
+                      info="Development parameters from the Gold Coast City Plan Version 13. These controls determine what can be built on this property — height limits, lot sizes, and density."
+                    >
+                      {cityPlan.zone && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="text-zinc-600"><CityPlanZoneIcon /></span>
+                            <span className="text-xs text-zinc-400">Zone Classification</span>
+                          </div>
+                          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg ${zoneColor(cityPlan.zone.lvl1_zone)}`}>
+                            {zoneIcon(cityPlan.zone.lvl1_zone)}
+                            {cityPlan.zone.lvl1_zone}
+                          </span>
+                          {cityPlan.zone.zone_precinct && (
+                            <p className="text-[10px] text-zinc-500 mt-1.5 pl-0.5">
+                              {cityPlan.zone.zone_precinct}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {cityPlan.building_height && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="text-zinc-600"><HeightIcon /></span>
+                              <span className="text-xs text-zinc-400">Max Building Height</span>
+                            </div>
+                            <span className={`text-xs font-bold tabular-nums ${heightColor(cityPlan.building_height.height_in_metres)}`}>
+                              {cityPlan.building_height.height_label || cityPlan.building_height.height_in_metres}
+                            </span>
+                          </div>
+                          {cityPlan.building_height.storey_number && cityPlan.building_height.storey_number !== "N/A" && (
+                            <p className="text-[10px] text-zinc-500 mt-1 pl-6">
+                              {cityPlan.building_height.storey_number} {Number(cityPlan.building_height.storey_number) === 1 ? "storey" : "storeys"} max
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      {!cityPlan.building_height && cityPlan.zone?.building_height && cityPlan.zone.building_height !== "No deisgnated heights" && (
+                        <SidebarRow
+                          icon={<HeightIcon />}
+                          label="Base Height (Zone)"
+                          value={cityPlan.zone.building_height}
+                        />
+                      )}
+                      {cityPlan.minimum_lot_size && (
+                        <SidebarRow
+                          icon={<MinLotIcon />}
+                          label="Min Lot Size"
+                          value={cityPlan.minimum_lot_size.mls}
+                          highlight
+                        />
+                      )}
+                      {cityPlan.residential_density && (
+                        <SidebarRow
+                          icon={<DensityIcon />}
+                          label="Residential Density"
+                          value={cityPlan.residential_density.code}
+                          valueColor={densityColor(cityPlan.residential_density.code)}
+                        />
+                      )}
+                    </SidebarSection>
+                  )}
+
+                  {/* Constraints & Overlays */}
+                  {(cityPlan.bushfire_hazard || cityPlan.airport_noise || cityPlan.buffer_area || cityPlan.dwelling_house_overlay) && (
+                    <SidebarSection
+                      title="Constraints"
+                      icon={<ConstraintIcon />}
+                      info="Planning overlays from the Gold Coast City Plan that impose additional requirements on development. These may affect building materials, setbacks, or permissible uses."
+                    >
+                      {cityPlan.bushfire_hazard && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className={bushfireIconColor(cityPlan.bushfire_hazard.level)}><FlameIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Bushfire Hazard</span>
+                              <p className={`text-xs font-semibold ${bushfireTextColor(cityPlan.bushfire_hazard.level)}`}>
+                                {cityPlan.bushfire_hazard.level.replace(" Potential Bushfire Intensity", "")}
+                              </p>
+                            </div>
+                            <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${bushfireBadge(cityPlan.bushfire_hazard.level)}`}>
+                              {bushfireSeverity(cityPlan.bushfire_hazard.level)}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {cityPlan.airport_noise && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-500"><PlaneIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Airport Noise</span>
+                              <p className="text-[10px] text-amber-400/80 mt-0.5">{cityPlan.airport_noise.buffer_source} — ANEF 25+</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {cityPlan.buffer_area && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-orange-500"><ShieldIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Buffer Area</span>
+                              <p className="text-[10px] text-orange-400/80 mt-0.5">Sensitive land use restrictions may apply</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {cityPlan.dwelling_house_overlay && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sky-500"><DwellingOverlayIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Dwelling House Overlay</span>
+                              <p className="text-[10px] text-sky-400/80 mt-0.5">Additional setback &amp; site cover controls</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </SidebarSection>
+                  )}
+                </>
+              )}
+
               {/* Nearby Subdivision Activity */}
               {typeInfo.allowSubdivision && (nearbyLoading || nearbyData) && (
                 <SidebarSection
@@ -1047,6 +1471,12 @@ export default function AnalysisPage() {
                                     <p className={`text-[10px] mt-0.5 ${isVisible ? "text-indigo-400/60" : "text-zinc-600"}`}>
                                       {plan.plan} · {plan.lot_count} lots · {plan.total_area_sqm.toLocaleString()} m² · {(plan.distance_m / 1000).toFixed(1)} km
                                     </p>
+                                    {plan.zone_name && (
+                                      <span className={`inline-flex items-center gap-1 text-[9px] mt-1 px-1.5 py-0.5 rounded ${zoneColor(plan.zone_name)}`}>
+                                        {zoneIcon(plan.zone_name)}
+                                        {plan.zone_name}
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-0.5 flex-shrink-0 mt-0.5">
                                     <button
@@ -1445,6 +1875,106 @@ function ZoneIcon() {
     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
       <path d="M12 22c1-4 6-7 6-12a6 6 0 10-12 0c0 5 5 8 6 12z" />
       <circle cx="12" cy="10" r="2" />
+    </svg>
+  );
+}
+
+// ─── City Plan Icons ─────────────────────────────────────────────────────
+
+function RulerIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M21 6L3 6M21 6v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6" />
+      <path d="M7 6v4M11 6v3M15 6v4M19 6v3" />
+    </svg>
+  );
+}
+
+function CityPlanZoneIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 6l9-4 9 4" />
+      <path d="M3 6v12l9 4 9-4V6" />
+      <path d="M3 18l9-4 9 4" />
+      <path d="M12 2v20" />
+    </svg>
+  );
+}
+
+function HeightIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 3v18" />
+      <path d="M8 7l4-4 4 4" />
+      <path d="M8 17l4 4 4-4" />
+      <path d="M4 12h16" />
+    </svg>
+  );
+}
+
+function MinLotIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="4" y="4" width="16" height="16" rx="1" strokeDasharray="3 2" />
+      <path d="M4 12h16" />
+      <path d="M12 4v16" />
+    </svg>
+  );
+}
+
+function DensityIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="3" y="13" width="5" height="8" rx="1" />
+      <rect x="10" y="8" width="5" height="13" rx="1" />
+      <rect x="17" y="3" width="5" height="18" rx="1" />
+    </svg>
+  );
+}
+
+function ConstraintIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 2L2 22h20L12 2z" />
+      <path d="M12 9v5" />
+      <circle cx="12" cy="17" r="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function FlameIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 22c4-3 7-6 7-10a7 7 0 00-7-9c-1 3-3 5-5 6a7 7 0 00-2 5c0 4 3 6 7 8z" />
+      <path d="M12 22c-2-1.5-3-3-3-5a3 3 0 013-3 3 3 0 013 3c0 2-1 3.5-3 5z" />
+    </svg>
+  );
+}
+
+function PlaneIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 10-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+    </svg>
+  );
+}
+
+function ShieldIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 2l8 4v5c0 5.25-3.5 9.75-8 11-4.5-1.25-8-5.75-8-11V6l8-4z" />
+      <path d="M12 8v4M12 16h.01" />
+    </svg>
+  );
+}
+
+function DwellingOverlayIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 12l9-8 9 8" />
+      <path d="M5 10v10h14V10" />
+      <path d="M9 21v-6h6v6" />
+      <path d="M16 5l3 2.5" strokeDasharray="2 2" />
     </svg>
   );
 }

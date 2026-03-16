@@ -9,10 +9,152 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
+async function handleLotPlanLookup(lot: string, plan: string): Promise<NextResponse> {
+  const debug: Record<string, unknown> = { input: `${lot}/${plan}`, mode: "lot_plan" };
+
+  // All parcels for this lot/plan
+  try {
+    const allPieces = await db.query(
+      `SELECT id, lot, plan, lotplan, lot_area, excl_area,
+         seg_num, par_num, segpar, par_ind, lot_volume,
+         surv_ind, tenure, prc, parish, county, lac,
+         shire_name, feat_name, alias_name, loc, locality,
+         parcel_typ, cover_typ, acc_code, ca_area_sqm, smis_map,
+         ST_AsGeoJSON(geometry) AS geometry_json,
+         ST_Y(ST_Centroid(geometry)) AS centroid_lat,
+         ST_X(ST_Centroid(geometry)) AS centroid_lon,
+         ST_Area(geometry::geography) AS area_m2_calc
+       FROM qld_cadastre_parcels
+       WHERE lot = $1 AND plan = $2
+       ORDER BY id`,
+      [lot, plan]
+    );
+
+    debug.allPiecesForMatchedLot = allPieces.rows.map((r) => ({ ...r, geometry_json: undefined }));
+    debug.allPiecesForMatchedLotGeometries = allPieces.rows.map((r) => ({
+      lot: r.lot,
+      plan: r.plan,
+      id: r.id,
+      geometry: r.geometry_json ? JSON.parse(r.geometry_json as string) : null,
+      centroid_lat: r.centroid_lat,
+      centroid_lon: r.centroid_lon,
+    }));
+
+    if (allPieces.rows.length > 0) {
+      const unionResult = await db.query(
+        `SELECT ST_AsGeoJSON(ST_Union(geometry)) AS union_geometry_json
+         FROM qld_cadastre_parcels WHERE lot = $1 AND plan = $2`,
+        [lot, plan]
+      );
+      const unionJson = unionResult.rows[0]?.union_geometry_json;
+      debug.allPiecesUnionGeometry = unionJson ? JSON.parse(unionJson) : null;
+
+      // Centroid of first piece for LGA/zoning
+      const firstRow = allPieces.rows[0];
+      const centroidLat = parseFloat(firstRow.centroid_lat as string);
+      const centroidLng = parseFloat(firstRow.centroid_lon as string);
+
+      const [lgaResult, zoneResult] = await Promise.all([
+        db.query(
+          `SELECT id, lga_name FROM gnaf_admin_lga
+           WHERE ST_Within(ST_SetSRID(ST_MakePoint($1, $2), 7844), geom) LIMIT 1`,
+          [centroidLng, centroidLat]
+        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+        db.query(
+          `SELECT id, zone_code, zone_name FROM qld_planning_zones
+           WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($1, $2), 7844), geometry) LIMIT 1`,
+          [centroidLng, centroidLat]
+        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+      ]);
+      debug.lga = lgaResult.rows[0] ?? null;
+      debug.zoning = zoneResult.rows[0] ?? null;
+    } else {
+      debug.error = `No parcels found for lot ${lot} / plan ${plan}`;
+    }
+  } catch (err) {
+    debug.error = err instanceof Error ? err.message : String(err);
+  }
+
+  // All addresses on this plan
+  try {
+    const allAddrs = await db.query(
+      `SELECT id, lot, plan, lotplan,
+         unit_type, unit_number, unit_suffix,
+         floor_type, floor_number, floor_suffix,
+         property_name,
+         street_no_1, street_no_1_suffix, street_no_2, street_no_2_suffix,
+         street_number, street_name, street_type, street_suffix, street_full,
+         locality, local_authority, state,
+         address, address_status, address_standard,
+         lotplan_status, address_pid, geocode_type,
+         latitude, longitude
+       FROM qld_cadastre_address
+       WHERE plan = $1
+       ORDER BY lot, street_number`,
+      [plan]
+    );
+    debug.allAddressesOnPlan = allAddrs.rows;
+  } catch (err) {
+    debug.allAddressesOnPlanError = err instanceof Error ? err.message : String(err);
+  }
+
+  return NextResponse.json(debug);
+}
+
+async function handlePlanSearch(plan: string): Promise<NextResponse> {
+  try {
+    const result = await db.query(
+      `SELECT
+         p.lot,
+         p.plan,
+         p.parcel_typ,
+         p.locality,
+         ROUND(ST_Area(ST_Union(p.geometry)::geography)::numeric, 0) AS lot_area_sqm,
+         MIN(a.address) AS sample_address,
+         ST_AsGeoJSON(ST_Union(p.geometry)) AS geometry_json,
+         ST_Y(ST_Centroid(ST_Union(p.geometry))) AS centroid_lat,
+         ST_X(ST_Centroid(ST_Union(p.geometry))) AS centroid_lon
+       FROM qld_cadastre_parcels p
+       LEFT JOIN qld_cadastre_address a ON a.lot = p.lot AND a.plan = p.plan
+       WHERE p.plan = $1
+       GROUP BY p.lot, p.plan, p.parcel_typ, p.locality
+       ORDER BY p.lot`,
+      [plan]
+    );
+    const results = result.rows.map((r) => ({
+      lot: r.lot,
+      plan: r.plan,
+      parcel_typ: r.parcel_typ,
+      locality: r.locality,
+      lot_area_sqm: r.lot_area_sqm,
+      sample_address: r.sample_address,
+      centroid_lat: r.centroid_lat,
+      centroid_lon: r.centroid_lon,
+      geometry: r.geometry_json ? JSON.parse(r.geometry_json as string) : null,
+    }));
+    return NextResponse.json({ mode: "plan_search", plan, results });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
+  }
+}
+
 export async function GET(req: NextRequest) {
   const address = req.nextUrl.searchParams.get("address")?.trim() ?? "";
+  const lotParam = req.nextUrl.searchParams.get("lot")?.trim() ?? "";
+  const planParam = req.nextUrl.searchParams.get("plan")?.trim().toUpperCase() ?? "";
+
+  // ── Plan-only search mode ────────────────────────────────────────────
+  if (!lotParam && planParam) {
+    return handlePlanSearch(planParam);
+  }
+
+  // ── Lot/plan direct lookup mode ──────────────────────────────────────
+  if (lotParam && planParam) {
+    return handleLotPlanLookup(lotParam, planParam);
+  }
+
   if (!address) {
-    return NextResponse.json({ error: "address param required" }, { status: 400 });
+    return NextResponse.json({ error: "address or lot+plan params required" }, { status: 400 });
   }
 
   const debug: Record<string, unknown> = { input: address };
