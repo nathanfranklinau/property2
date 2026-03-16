@@ -28,9 +28,6 @@ type AnalysisStatus = {
   main_house_size_sqm: number | null;
   building_count: number | null;
   available_space_sqm: number | null;
-  pool_count_detected: number | null;
-  pool_count_registered: number | null;
-  pool_area_sqm: number | null;
   image_satellite_path: string | null;
   image_styled_map_path: string | null;
   image_mask2_path: string | null;
@@ -575,8 +572,8 @@ export default function AnalysisPage() {
 
   const freeSpace = useMemo(() => {
     if (status?.lot_area_sqm == null) return status?.available_space_sqm ?? null;
-    return status.lot_area_sqm - totalStructuresArea - (Number(status.pool_area_sqm) || 0);
-  }, [status?.lot_area_sqm, status?.available_space_sqm, status?.pool_area_sqm, totalStructuresArea]);
+    return status.lot_area_sqm - totalStructuresArea;
+  }, [status?.lot_area_sqm, status?.available_space_sqm, totalStructuresArea]);
 
   // Property type classification — must be before any early returns (Rules of Hooks)
   const typeInfo: PropertyTypeInfo = useMemo(
@@ -1030,7 +1027,7 @@ export default function AnalysisPage() {
                       <div>
                         <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
                         <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
-                          {Math.round(totalStructuresArea + (Number(status.pool_area_sqm) || 0)).toLocaleString()}
+                          {Math.round(totalStructuresArea).toLocaleString()}
                           <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
                         </p>
                       </div>
@@ -1154,13 +1151,6 @@ export default function AnalysisPage() {
                     label="Total Structures"
                     value={sqm(totalStructuresArea)}
                   />
-                  {status.pool_area_sqm != null && status.pool_area_sqm > 0 && (
-                    <SidebarRow
-                      icon={<PoolIcon />}
-                      label="Pool Area"
-                      value={sqm(status.pool_area_sqm)}
-                    />
-                  )}
                 </SidebarSection>
               )}
 
@@ -1832,15 +1822,6 @@ function StructuresIcon() {
   );
 }
 
-function PoolIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <path d="M2 12c2-2 4-2 6 0s4 2 6 0 4-2 6 0" />
-      <path d="M2 17c2-2 4-2 6 0s4 2 6 0 4-2 6 0" />
-      <path d="M6 8V4M18 8V4" />
-    </svg>
-  );
-}
 
 function BuildingCountIcon() {
   return (
