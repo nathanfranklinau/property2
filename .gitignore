@@ -33,6 +33,7 @@ yarn-error.log*
 
 # Raw datasets (large binary/csv files)
 data/
+db/datasets/
 *.shp
 *.dbf
 *.shx

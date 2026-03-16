@@ -11,5 +11,8 @@
       "Bash(psql \"postgresql://realestate:realestate@localhost:5432/realestatev2\" -t -A -c \"SELECT id, display_address, lga_name FROM parcels LIMIT 3\")",
       "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \":*)"
     ]
+  },
+  "env": {
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-6"
   }
 }
