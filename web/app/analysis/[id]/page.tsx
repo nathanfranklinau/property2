@@ -15,6 +15,7 @@ const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
 import { simplifyFootprint, computeBufferCoords, type BuildingFootprint } from "@/components/PropertyMap";
 import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type PropertyTypeInfo } from "@/lib/property-type";
 import { PlanTypeIcon } from "@/components/PlanTypeIcon";
+import { getZoneDefinition } from "@/lib/zone-definitions";
 
 type AnalysisStatus = {
   parcel_id: string;
@@ -1181,10 +1182,10 @@ export default function AnalysisPage() {
                             <span className="text-zinc-600"><CityPlanZoneIcon /></span>
                             <span className="text-xs text-zinc-400">Zone Classification</span>
                           </div>
-                          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg ${zoneColor(cityPlan.zone.lvl1_zone)}`}>
-                            {zoneIcon(cityPlan.zone.lvl1_zone)}
-                            {cityPlan.zone.lvl1_zone}
-                          </span>
+                          <ZoneTooltip
+                            zoneName={cityPlan.zone.lvl1_zone}
+                            lgaName={status?.lga_name ?? null}
+                          />
                           {cityPlan.zone.zone_precinct && (
                             <p className="text-[10px] text-zinc-500 mt-1.5 pl-0.5">
                               {cityPlan.zone.zone_precinct}
@@ -1887,6 +1888,47 @@ function RulerIcon() {
       <path d="M21 6L3 6M21 6v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6" />
       <path d="M7 6v4M11 6v3M15 6v4M19 6v3" />
     </svg>
+  );
+}
+
+/**
+ * Zone badge with hover tooltip showing the authoritative purpose statement.
+ * Definitions are sourced from each council's published planning scheme via
+ * getZoneDefinition() in web/lib/zone-definitions.ts — see that file for
+ * exact source citations per LGA.
+ */
+function ZoneTooltip({ zoneName, lgaName }: { zoneName: string; lgaName: string | null }) {
+  const def = getZoneDefinition(lgaName, zoneName);
+  const sourceLabel = lgaName?.includes("Gold Coast")
+    ? "Gold Coast City Plan V13"
+    : lgaName ?? null;
+
+  return (
+    <div className="relative group/zone inline-block">
+      <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg cursor-default ${zoneColor(zoneName)}`}>
+        {zoneIcon(zoneName)}
+        {zoneName}
+        {def && (
+          <svg className="w-3 h-3 opacity-50 flex-shrink-0 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
+          </svg>
+        )}
+      </span>
+      {def && (
+        <div className="absolute top-full left-0 mt-1.5 w-72 bg-zinc-950 border border-white/10 rounded-xl p-3 text-[11px] text-zinc-300 leading-relaxed shadow-2xl z-[100] opacity-0 group-hover/zone:opacity-100 pointer-events-none transition-opacity duration-150">
+          {sourceLabel && (
+            <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2 flex items-center gap-1.5">
+              <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" />
+              </svg>
+              {sourceLabel}
+            </p>
+          )}
+          {def}
+        </div>
+      )}
+    </div>
   );
 }
 
