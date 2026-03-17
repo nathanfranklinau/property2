@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     }
 
     // Run all spatial queries in parallel against the parcel geometry
-    const [zone, height, bushfire, dwelling, mls, airport, density, buffer] = await Promise.all([
+    const [zone, height, bushfire, dwelling, mls, airport, density, buffer, flood, heritage, heritageProx, environmental, cornerLot] = await Promise.all([
       // Zone
       db.query(
         `SELECT z.lvl1_zone, z.zone, z.zone_precinct, z.building_height, z.bh_category
@@ -113,6 +113,50 @@ export async function GET(req: NextRequest) {
          LIMIT 1`,
         [parcelId]
       ),
+      // Flood
+      db.query(
+        `SELECT fl.ovl2_desc
+         FROM qld_goldcoast_flood fl
+         JOIN parcels p ON ST_Intersects(fl.geometry, p.geometry)
+         WHERE p.id = $1
+         LIMIT 1`,
+        [parcelId]
+      ),
+      // Heritage place
+      db.query(
+        `SELECT h.place_name, h.lhr_id, h.qld_heritage_register, h.register_status
+         FROM qld_goldcoast_heritage h
+         JOIN parcels p ON ST_Intersects(h.geometry, p.geometry)
+         WHERE p.id = $1
+         LIMIT 1`,
+        [parcelId]
+      ),
+      // Heritage proximity
+      db.query(
+        `SELECT hp.place_name, hp.lhr_id
+         FROM qld_goldcoast_heritage_proximity hp
+         JOIN parcels p ON ST_Intersects(hp.geometry, p.geometry)
+         WHERE p.id = $1
+         LIMIT 1`,
+        [parcelId]
+      ),
+      // Environmental significance
+      db.query(
+        `SELECT DISTINCT e.category
+         FROM qld_goldcoast_environmental e
+         JOIN parcels p ON ST_Intersects(e.geometry, p.geometry)
+         WHERE p.id = $1`,
+        [parcelId]
+      ),
+      // Corner lot detection (has a second street number)
+      db.query(
+        `SELECT EXISTS(
+           SELECT 1 FROM qld_cadastre_address a
+           JOIN parcels p ON a.lotplan = (p.cadastre_lot || p.cadastre_plan)
+           WHERE p.id = $1 AND a.street_no_2 IS NOT NULL
+         ) AS is_corner`,
+        [parcelId]
+      ),
     ]);
 
     const zoneRow = zone.rows[0] ?? null;
@@ -121,6 +165,10 @@ export async function GET(req: NextRequest) {
     const mlsRow = mls.rows[0] ?? null;
     const airportRow = airport.rows[0] ?? null;
     const densityRow = density.rows[0] ?? null;
+    const floodRow = flood.rows[0] ?? null;
+    const heritageRow = heritage.rows[0] ?? null;
+    const heritageProxRow = heritageProx.rows[0] ?? null;
+    const envCategories = environmental.rows.map((r: { category: string }) => r.category);
 
     return NextResponse.json({
       zone: zoneRow
@@ -152,6 +200,20 @@ export async function GET(req: NextRequest) {
         ? { code: densityRow.residential_density }
         : null,
       buffer_area: buffer.rows.length > 0,
+      flood: floodRow ? { level: floodRow.ovl2_desc } : null,
+      heritage: heritageRow
+        ? {
+            place_name: heritageRow.place_name,
+            lhr_id: heritageRow.lhr_id,
+            qld_heritage_register: heritageRow.qld_heritage_register,
+            register_status: heritageRow.register_status,
+          }
+        : null,
+      heritage_proximity: heritageProxRow
+        ? { place_name: heritageProxRow.place_name }
+        : null,
+      environmental_significance: envCategories.length > 0 ? envCategories : null,
+      corner_lot: cornerLot.rows[0]?.is_corner ?? false,
     });
   } catch (err) {
     console.error("City Plan lookup error:", err);

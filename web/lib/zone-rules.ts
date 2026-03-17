@@ -10,6 +10,7 @@ export type ZoneRules = {
   description: string;
   minLotSizeSqm: number | null;
   maxStoreys: number | null;
+  maxSiteCover: number | null; // fraction, e.g. 0.50 = 50%
   permittedUses: string[];
   subdivisionNotes: string;
 };
@@ -37,6 +38,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Suburban residential areas with detached houses on individual lots.",
       minLotSizeSqm: 400,
       maxStoreys: 2,
+      maxSiteCover: 0.50,
       permittedUses: [
         "Dwelling house",
         "Home-based business",
@@ -53,6 +55,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Areas for townhouses, duplexes, and small unit blocks at higher density.",
       minLotSizeSqm: 300,
       maxStoreys: 3,
+      maxSiteCover: 0.50,
       permittedUses: [
         "Dwelling house",
         "Dual occupancy",
@@ -70,6 +73,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Older suburbs with heritage or character value. Stricter building controls.",
       minLotSizeSqm: 600,
       maxStoreys: 2,
+      maxSiteCover: 0.50,
       permittedUses: ["Dwelling house", "Home-based business"],
       subdivisionNotes:
         "Subdivision may be restricted to preserve neighbourhood character. Often requires impact assessment.",
@@ -82,6 +86,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Large lot residential on the urban fringe. Limited subdivision potential.",
       minLotSizeSqm: 2000,
       maxStoreys: 2,
+      maxSiteCover: 0.25,
       permittedUses: [
         "Dwelling house",
         "Home-based business",
@@ -98,6 +103,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Land earmarked for future urban development. Not yet zoned for residential.",
       minLotSizeSqm: null,
       maxStoreys: null,
+      maxSiteCover: null,
       permittedUses: ["Existing lawful use"],
       subdivisionNotes:
         "Subdivision generally not permitted until a detailed structure plan is approved.",
@@ -110,6 +116,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Standard residential zone allowing a range of housing types.",
       minLotSizeSqm: 400,
       maxStoreys: 3,
+      maxSiteCover: 0.50,
       permittedUses: [
         "Dwelling house",
         "Dual occupancy",
@@ -126,6 +133,7 @@ const ZONE_PATTERNS: [string, ZoneRules][] = [
         "Areas designated for apartment buildings and high-rise residential.",
       minLotSizeSqm: 800,
       maxStoreys: 8,
+      maxSiteCover: 0.50,
       permittedUses: [
         "Multiple dwelling",
         "Short-term accommodation",

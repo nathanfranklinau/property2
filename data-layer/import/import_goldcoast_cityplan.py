@@ -161,6 +161,66 @@ LAYERS = {
             ("RESIDENTIAL_DENSITY",  "residential_density"),
         ],
     },
+    81: {
+        "table": "qld_goldcoast_flood",
+        "description": "Flood assessment required",
+        "fields": [
+            ("LGA_CODE",  "lga_code"),
+            ("CAT_DESC",  "cat_desc"),
+            ("OVL_CAT",   "ovl_cat"),
+            ("OVL2_DESC", "ovl2_desc"),
+            ("OVL2_CAT",  "ovl2_cat"),
+        ],
+    },
+    83: {
+        "table": "qld_goldcoast_heritage",
+        "description": "Heritage place",
+        "fields": [
+            ("LGA_CODE",                    "lga_code"),
+            ("CAT_DESC",                    "cat_desc"),
+            ("OVL_CAT",                     "ovl_cat"),
+            ("OVL2_DESC",                   "ovl2_desc"),
+            ("OVL2_CAT",                    "ovl2_cat"),
+            ("LHR_ID",                      "lhr_id"),
+            ("PLACE_NAME",                  "place_name"),
+            ("ASSESSMENT_ID",               "assessment_id"),
+            ("REGISTER_STATUS",             "register_status"),
+            ("QLD_HERITAGE_REGISTER",       "qld_heritage_register"),
+            ("HERITAGE_PROTECTION_BOUNDARY","heritage_protection_boundary"),
+            ("ADJOINING_ALLOTMENTS",        "adjoining_allotments"),
+        ],
+    },
+    84: {
+        "table": "qld_goldcoast_heritage_proximity",
+        "description": "Place in proximity to a local heritage place",
+        "fields": [
+            ("LGA_CODE",              "lga_code"),
+            ("CAT_DESC",              "cat_desc"),
+            ("OVL_CAT",               "ovl_cat"),
+            ("OVL2_DESC",             "ovl2_desc"),
+            ("OVL2_CAT",              "ovl2_cat"),
+            ("LHR_ID",                "lhr_id"),
+            ("LOT_PLAN",              "lot_plan"),
+            ("ASSESSMENT_ID",         "assessment_id"),
+            ("PLACE_NAME",            "place_name"),
+            ("QLD_HERITAGE_REGISTER", "qld_heritage_register"),
+        ],
+    },
+}
+
+# Environmental significance sub-layers → single qld_goldcoast_environmental table.
+# Each layer is imported with a static 'category' column value.
+ENVIRONMENTAL_LAYERS = {
+    48: "Coastal wetlands & islands core habitat",
+    49: "Hinterland core habitat",
+    50: "Substantial remnants",
+    51: "Hinterland to coast critical corridors",
+    54: "State significant species",
+    55: "Koala habitat areas",
+    57: "Local significant species",
+    60: "Regulated vegetation",
+    66: "State significant wetlands & aquatic systems",
+    68: "Local significant wetlands",
 }
 
 # How many features to request per page. Service maxRecordCount is 2000;
@@ -246,23 +306,29 @@ def fetch_page(session: requests.Session, layer_id: int, offset: int, delay: flo
     )
 
 
-def insert_features(conn, table: str, fields: list, features: list):
-    """Bulk-insert a page of GeoJSON features into the target table."""
+def insert_features(conn, table: str, fields: list, features: list, extra_cols: dict | None = None):
+    """Bulk-insert a page of GeoJSON features into the target table.
+
+    extra_cols: optional dict of {column_name: static_value} to add to every row.
+    """
     if not features:
         return
 
     pg_cols = [pg_col for _, pg_col in fields]
-    col_list = ", ".join(pg_cols + ["geometry"]) if pg_cols else "geometry"
+    extra_names = list((extra_cols or {}).keys())
+    all_cols = extra_names + pg_cols
+    col_list = ", ".join(all_cols + ["geometry"]) if all_cols else "geometry"
 
     # Build parameterized placeholders
-    attr_placeholders = ", ".join(["%s"] * len(pg_cols))
+    attr_placeholders = ", ".join(["%s"] * len(all_cols))
     geom_expr = "ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), 7844)"
 
-    if pg_cols:
+    if all_cols:
         sql = f"INSERT INTO {table} ({col_list}) VALUES ({attr_placeholders}, {geom_expr})"
     else:
         sql = f"INSERT INTO {table} (geometry) VALUES ({geom_expr})"
 
+    extra_vals = list((extra_cols or {}).values())
     rows = []
     for feat in features:
         props = feat.get("properties") or {}
@@ -270,7 +336,7 @@ def insert_features(conn, table: str, fields: list, features: list):
         geom_str = json.dumps(geom) if geom else None
 
         attr_vals = [props.get(api_field) for api_field, _ in fields]
-        rows.append(tuple(attr_vals) + (geom_str,))
+        rows.append(tuple(extra_vals + attr_vals) + (geom_str,))
 
     with conn.cursor() as cur:
         psycopg2.extras.execute_batch(cur, sql, rows, page_size=500)
@@ -324,12 +390,48 @@ def import_layer(session, conn, layer_id: int, layer: dict, truncate: bool, dela
     log.info(f"  Done — {db_count:,} rows in {table}")
 
 
+def import_environmental_layer(session, conn, layer_id: int, category: str, delay: float):
+    """Import a single environmental significance sub-layer into the consolidated table."""
+    table = "qld_goldcoast_environmental"
+    fields = [
+        ("LGA_CODE",  "lga_code"),
+        ("CAT_DESC",  "cat_desc"),
+        ("OVL_CAT",   "ovl_cat"),
+        ("OVL2_DESC", "ovl2_desc"),
+        ("OVL2_CAT",  "ovl2_cat"),
+    ]
+
+    log.info(f"Environmental layer {layer_id}: {category}")
+
+    total = get_feature_count(session, layer_id, delay)
+    log.info(f"  Total features: {total:,}")
+    if total == 0:
+        log.warning("  No features — skipping.")
+        return
+
+    offset = 0
+    with tqdm(total=total, unit="feat", desc=f"  Env {layer_id}") as pbar:
+        while True:
+            page = fetch_page(session, layer_id, offset, delay)
+            features = page.get("features", [])
+            if not features:
+                break
+            insert_features(conn, table, fields, features, extra_cols={"category": category})
+            offset += len(features)
+            pbar.update(len(features))
+            if len(features) < PAGE_SIZE:
+                break
+
+
 def list_layers():
     print(f"\nAvailable layers ({BASE_URL}):\n")
     print(f"  {'ID':>4}  {'Table':<45}  Description")
     print(f"  {'--':>4}  {'-----':<45}  -----------")
     for layer_id, layer in sorted(LAYERS.items()):
         print(f"  {layer_id:>4}  {layer['table']:<45}  {layer['description']}")
+    print(f"\n  Environmental significance sub-layers → qld_goldcoast_environmental:")
+    for layer_id, category in sorted(ENVIRONMENTAL_LAYERS.items()):
+        print(f"  {layer_id:>4}  {'qld_goldcoast_environmental':<45}  {category}")
     print()
 
 
@@ -359,8 +461,9 @@ def main():
         list_layers()
         sys.exit(0)
 
-    target_ids = args.layers if args.layers else sorted(LAYERS.keys())
-    unknown = [lid for lid in target_ids if lid not in LAYERS]
+    all_known = set(LAYERS.keys()) | set(ENVIRONMENTAL_LAYERS.keys())
+    target_ids = args.layers if args.layers else sorted(all_known)
+    unknown = [lid for lid in target_ids if lid not in all_known]
     if unknown:
         log.error(f"Unknown layer IDs: {unknown}. Run --list-layers to see valid IDs.")
         sys.exit(1)
@@ -369,8 +472,16 @@ def main():
     conn = get_connection()
 
     try:
+        # Truncate environmental table once if any env layers are targeted
+        env_targeted = [lid for lid in target_ids if lid in ENVIRONMENTAL_LAYERS]
+        if args.truncate and env_targeted:
+            truncate_table(conn, "qld_goldcoast_environmental")
+
         for layer_id in target_ids:
-            import_layer(session, conn, layer_id, LAYERS[layer_id], args.truncate, args.delay)
+            if layer_id in LAYERS:
+                import_layer(session, conn, layer_id, LAYERS[layer_id], args.truncate, args.delay)
+            elif layer_id in ENVIRONMENTAL_LAYERS:
+                import_environmental_layer(session, conn, layer_id, ENVIRONMENTAL_LAYERS[layer_id], args.delay)
 
         log.info("Gold Coast City Plan import complete.")
     finally:

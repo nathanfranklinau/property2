@@ -16,6 +16,7 @@ import { simplifyFootprint, computeBufferCoords, type BuildingFootprint } from "
 import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type PropertyTypeInfo } from "@/lib/property-type";
 import { PlanTypeIcon } from "@/components/PlanTypeIcon";
 import { getZoneDefinition } from "@/lib/zone-definitions";
+import { getZoneRules } from "@/lib/zone-rules";
 
 type AnalysisStatus = {
   parcel_id: string;
@@ -70,6 +71,11 @@ type CityPlanData = {
   airport_noise: { sensitive_use_type: string; buffer_source: string } | null;
   residential_density: { code: string } | null;
   buffer_area: boolean;
+  flood: { level: string } | null;
+  heritage: { place_name: string; lhr_id: string; qld_heritage_register: string | null; register_status: string | null } | null;
+  heritage_proximity: { place_name: string } | null;
+  environmental_significance: string[] | null;
+  corner_lot: boolean;
 };
 
 type NearbyPlan = {
@@ -572,7 +578,7 @@ export default function AnalysisPage() {
 
   const freeSpace = useMemo(() => {
     if (status?.lot_area_sqm == null) return status?.available_space_sqm ?? null;
-    return status.lot_area_sqm - totalStructuresArea;
+    return Math.max(0, status.lot_area_sqm - totalStructuresArea);
   }, [status?.lot_area_sqm, status?.available_space_sqm, totalStructuresArea]);
 
   // Property type classification — must be before any early returns (Rules of Hooks)
@@ -1027,7 +1033,7 @@ export default function AnalysisPage() {
                       <div>
                         <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
                         <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
-                          {Math.round(totalStructuresArea).toLocaleString()}
+                          {Math.round(Math.min(totalStructuresArea, status.lot_area_sqm)).toLocaleString()}
                           <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
                         </p>
                       </div>
@@ -1228,12 +1234,159 @@ export default function AnalysisPage() {
                   )}
 
                   {/* Constraints & Overlays */}
-                  {(cityPlan.bushfire_hazard || cityPlan.airport_noise || cityPlan.buffer_area || cityPlan.dwelling_house_overlay) && (
+                  {/* Development Insights (derived attributes) */}
+                  {(() => {
+                    const lotArea = status?.lot_area_sqm;
+                    const mls = cityPlan.minimum_lot_size ? parseFloat(cityPlan.minimum_lot_size.mls) : null;
+                    const subdivisibleLots = (lotArea && mls && mls > 0) ? Math.floor(lotArea / mls) : null;
+                    const zoneRules = getZoneRules(cityPlan.zone?.lvl1_zone ?? null);
+                    const maxCover = zoneRules?.maxSiteCover ?? null;
+                    const siteCoverHeadroom = (lotArea && maxCover && totalStructuresArea != null)
+                      ? Math.max(0, (maxCover * lotArea) - totalStructuresArea)
+                      : null;
+                    const constraintCount = [
+                      cityPlan.flood,
+                      cityPlan.heritage,
+                      cityPlan.heritage_proximity,
+                      cityPlan.environmental_significance,
+                      cityPlan.bushfire_hazard,
+                      cityPlan.airport_noise,
+                      cityPlan.buffer_area,
+                      cityPlan.dwelling_house_overlay,
+                    ].filter(Boolean).length;
+                    const nearbyCount = nearbyData
+                      ? nearbyData.counts.within_20km
+                      : null;
+
+                    const hasInsights = subdivisibleLots !== null || siteCoverHeadroom !== null || nearbyCount !== null;
+                    if (!hasInsights) return null;
+
+                    return (
+                      <SidebarSection
+                        title="Development Insights"
+                        icon={<InsightsIcon />}
+                        info="Derived indicators computed from planning controls, lot size, and detected structures. These are estimates — always verify with a town planner before making decisions."
+                      >
+                        {subdivisibleLots !== null && subdivisibleLots >= 2 && (
+                          <SidebarRow
+                            icon={<SubdivisionPotentialIcon />}
+                            label="Potential Lots"
+                            value={`${subdivisibleLots}`}
+                            valueColor={subdivisibleLots >= 3 ? "text-emerald-400" : "text-zinc-300"}
+                          />
+                        )}
+                        {subdivisibleLots !== null && subdivisibleLots < 2 && (
+                          <SidebarRow
+                            icon={<SubdivisionPotentialIcon />}
+                            label="Potential Lots"
+                            value="Below min"
+                            valueColor="text-zinc-500"
+                          />
+                        )}
+                        {siteCoverHeadroom !== null && (
+                          <SidebarRow
+                            icon={<SiteCoverIcon />}
+                            label="Site Cover Remaining"
+                            value={sqm(siteCoverHeadroom)}
+                            valueColor={siteCoverHeadroom > 50 ? "text-emerald-400" : "text-amber-400"}
+                          />
+                        )}
+                        {cityPlan.corner_lot && (
+                          <SidebarRow
+                            icon={<CornerLotIcon />}
+                            label="Corner Lot"
+                            value="Yes"
+                            valueColor="text-indigo-400"
+                          />
+                        )}
+                        {constraintCount > 0 && (
+                          <SidebarRow
+                            icon={<ConstraintIcon />}
+                            label="Overlay Count"
+                            value={`${constraintCount}`}
+                            valueColor={constraintCount >= 3 ? "text-red-400" : constraintCount >= 2 ? "text-amber-400" : "text-zinc-300"}
+                          />
+                        )}
+                        {nearbyCount !== null && nearbyCount > 0 && (
+                          <SidebarRow
+                            icon={<NearbyActivityIcon />}
+                            label="Nearby Subdivisions"
+                            value={`${nearbyCount} within 20km`}
+                            valueColor="text-indigo-400"
+                          />
+                        )}
+                      </SidebarSection>
+                    );
+                  })()}
+
+                  {(cityPlan.bushfire_hazard || cityPlan.airport_noise || cityPlan.buffer_area || cityPlan.dwelling_house_overlay || cityPlan.flood || cityPlan.heritage || cityPlan.heritage_proximity || cityPlan.environmental_significance) && (
                     <SidebarSection
                       title="Constraints"
                       icon={<ConstraintIcon />}
                       info="Planning overlays from the Gold Coast City Plan that impose additional requirements on development. These may affect building materials, setbacks, or permissible uses."
                     >
+                      {cityPlan.flood && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-blue-500"><FloodIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Flood Overlay</span>
+                              <p className="text-xs font-semibold text-blue-400">Flood assessment required</p>
+                              {cityPlan.flood.level && (
+                                <p className="text-[10px] text-blue-400/70 mt-0.5">{cityPlan.flood.level}</p>
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                              Constraint
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {cityPlan.heritage && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-600"><HeritageIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Heritage Place</span>
+                              <p className="text-xs font-semibold text-amber-400">{cityPlan.heritage.place_name}</p>
+                              {cityPlan.heritage.qld_heritage_register === "Yes" && (
+                                <p className="text-[10px] text-amber-400/70 mt-0.5">QLD Heritage Register listed</p>
+                              )}
+                            </div>
+                            <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">
+                              Heritage
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {!cityPlan.heritage && cityPlan.heritage_proximity && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-amber-600/70"><HeritageIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Near Heritage Place</span>
+                              <p className="text-[10px] text-amber-400/70 mt-0.5">Adjacent to: {cityPlan.heritage_proximity.place_name}</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {cityPlan.environmental_significance && (
+                        <div className="px-3 py-2.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-emerald-500"><EnvironmentalIcon /></span>
+                            <div className="flex-1 min-w-0">
+                              <span className="text-xs text-zinc-400">Environmental Significance</span>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {cityPlan.environmental_significance.map((cat) => (
+                                  <span key={cat} className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">
+                                    {cat}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       {cityPlan.bushfire_hazard && (
                         <div className="px-3 py-2.5">
                           <div className="flex items-center gap-2">
@@ -1463,10 +1616,9 @@ export default function AnalysisPage() {
                                       {plan.plan} · {plan.lot_count} lots · {plan.total_area_sqm.toLocaleString()} m² · {(plan.distance_m / 1000).toFixed(1)} km
                                     </p>
                                     {plan.zone_name && (
-                                      <span className={`inline-flex items-center gap-1 text-[9px] mt-1 px-1.5 py-0.5 rounded ${zoneColor(plan.zone_name)}`}>
-                                        {zoneIcon(plan.zone_name)}
-                                        {plan.zone_name}
-                                      </span>
+                                      <div className="mt-1">
+                                        <ZoneTooltip zoneName={plan.zone_name} lgaName={status?.lga_name ?? null} />
+                                      </div>
                                     )}
                                   </div>
                                   <div className="flex items-center gap-0.5 flex-shrink-0 mt-0.5">
@@ -1880,24 +2032,42 @@ function RulerIcon() {
  */
 function ZoneTooltip({ zoneName, lgaName }: { zoneName: string; lgaName: string | null }) {
   const def = getZoneDefinition(lgaName, zoneName);
-  const sourceLabel = lgaName?.includes("Gold Coast")
-    ? "Gold Coast City Plan V13"
-    : lgaName ?? null;
+  const sourceLabel = "Planning Scheme";
+  const badgeRef = useRef<HTMLSpanElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
-  return (
-    <div className="relative group/zone inline-block">
+  if (!def) {
+    return (
       <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg cursor-default ${zoneColor(zoneName)}`}>
         {zoneIcon(zoneName)}
         {zoneName}
-        {def && (
-          <svg className="w-3 h-3 opacity-50 flex-shrink-0 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <circle cx="12" cy="12" r="10" />
-            <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
-          </svg>
-        )}
       </span>
-      {def && (
-        <div className="absolute top-full left-0 mt-1.5 w-72 bg-zinc-950 border border-white/10 rounded-xl p-3 text-[11px] text-zinc-300 leading-relaxed shadow-2xl z-[100] opacity-0 group-hover/zone:opacity-100 pointer-events-none transition-opacity duration-150">
+    );
+  }
+
+  return (
+    <div className="inline-block">
+      <span
+        ref={badgeRef}
+        className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg cursor-default ${zoneColor(zoneName)}`}
+        onMouseEnter={() => {
+          const r = badgeRef.current?.getBoundingClientRect();
+          if (r) setPos({ top: r.bottom + 6, left: r.left });
+        }}
+        onMouseLeave={() => setPos(null)}
+      >
+        {zoneIcon(zoneName)}
+        {zoneName}
+        <svg className="w-3 h-3 opacity-50 flex-shrink-0 ml-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 16v-4M12 8h.01" strokeLinecap="round" />
+        </svg>
+      </span>
+      {pos && (
+        <div
+          className="fixed w-72 bg-zinc-950 border border-white/10 rounded-xl p-3 text-[11px] text-zinc-300 leading-relaxed shadow-2xl z-[9999] pointer-events-none"
+          style={{ top: pos.top, left: pos.left }}
+        >
           {sourceLabel && (
             <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500 mb-2 flex items-center gap-1.5">
               <svg className="w-2.5 h-2.5 flex-shrink-0" viewBox="0 0 24 24" fill="currentColor">
@@ -1987,6 +2157,87 @@ function ShieldIcon() {
     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
       <path d="M12 2l8 4v5c0 5.25-3.5 9.75-8 11-4.5-1.25-8-5.75-8-11V6l8-4z" />
       <path d="M12 8v4M12 16h.01" />
+    </svg>
+  );
+}
+
+function InsightsIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 2a7 7 0 017 7c0 2.5-1.5 4.5-3 6l-1 4H9l-1-4c-1.5-1.5-3-3.5-3-6a7 7 0 017-7z" />
+      <path d="M10 21h4" />
+    </svg>
+  );
+}
+
+function SubdivisionPotentialIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="3" y="3" width="8" height="8" rx="1" />
+      <rect x="13" y="3" width="8" height="8" rx="1" />
+      <rect x="3" y="13" width="8" height="8" rx="1" />
+      <rect x="13" y="13" width="8" height="8" rx="1" />
+    </svg>
+  );
+}
+
+function SiteCoverIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <rect x="6" y="6" width="8" height="8" rx="1" fill="currentColor" opacity={0.3} />
+    </svg>
+  );
+}
+
+function CornerLotIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 3h18v18" />
+      <path d="M3 3v18h18" />
+      <path d="M7 7h10v10H7z" strokeDasharray="3 2" />
+    </svg>
+  );
+}
+
+function NearbyActivityIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <circle cx="12" cy="12" r="3" />
+      <circle cx="12" cy="12" r="7" strokeDasharray="3 2" />
+      <circle cx="12" cy="12" r="11" strokeDasharray="3 2" />
+    </svg>
+  );
+}
+
+function FloodIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 17c1.5-2 3-3 4.5-1s3 1 4.5-1 3-3 4.5-1 3 1 4.5-1" />
+      <path d="M3 21c1.5-2 3-3 4.5-1s3 1 4.5-1 3-3 4.5-1 3 1 4.5-1" />
+      <path d="M12 3v10M8 7l4-4 4 4" />
+    </svg>
+  );
+}
+
+function HeritageIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M3 21h18" />
+      <path d="M5 21V7l7-4 7 4v14" />
+      <path d="M9 21v-4h6v4" />
+      <path d="M9 10h1M14 10h1" />
+    </svg>
+  );
+}
+
+function EnvironmentalIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M12 22c-4 0-8-2-8-8 0-4 4-11 8-11s8 7 8 11c0 6-4 8-8 8z" />
+      <path d="M12 22V8" />
+      <path d="M8 14c2-1 4 0 4 0" />
+      <path d="M16 12c-2-1-4 0-4 0" />
     </svg>
   );
 }
