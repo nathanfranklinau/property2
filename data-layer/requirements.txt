@@ -27,7 +27,8 @@ ultralytics>=8.0      # YOLO — downloads model weights on first use
 
 # ── HTTP client ───────────────────────────────────────────────────────────────
 requests>=2.31
-
+# ── Browser automation (ePathway scraping) ────────────────────────────────
+playwright>=1.40
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv>=1.0
 tqdm>=4.66

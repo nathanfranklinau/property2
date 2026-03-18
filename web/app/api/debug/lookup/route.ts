@@ -9,6 +9,57 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 
+// ── Gold Coast overlay queries (lot/plan based) ──────────────────────────────
+
+async function fetchGoldCoastOverlays(lot: string, plan: string): Promise<Record<string, unknown>> {
+  const parcelUnion = `(SELECT ST_Union(geometry) FROM qld_cadastre_parcels WHERE lot = $1 AND plan = $2)`;
+
+  const gcQuery = (table: string, cols: string) =>
+    db.query(`SELECT ${cols} FROM ${table} WHERE ST_Intersects(geometry, ${parcelUnion})`, [lot, plan])
+      .catch(() => ({ rows: [] as Record<string, unknown>[] }));
+
+  const [
+    zones, buildingHeight, flood, bushfire, minLotSize,
+    residentialDensity, heritage, heritageProximity, environmental,
+    bufferArea, dwellingHouseOverlay, partyHouse, airportNoise,
+  ] = await Promise.all([
+    gcQuery("qld_goldcoast_zones", "id, zone_precinct, lvl1_zone, zone, building_height, bh_category"),
+    gcQuery("qld_goldcoast_building_height", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, height_in_metres, storey_number, label, height_label"),
+    gcQuery("qld_goldcoast_flood", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat"),
+    gcQuery("qld_goldcoast_bushfire_hazard", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat"),
+    gcQuery("qld_goldcoast_minimum_lot_size", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, mls"),
+    gcQuery("qld_goldcoast_residential_density", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, residential_density"),
+    gcQuery("qld_goldcoast_heritage", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, lhr_id, place_name, assessment_id, register_status, qld_heritage_register, heritage_protection_boundary, adjoining_allotments"),
+    db.query(
+      `SELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, lhr_id, lot_plan, assessment_id, place_name, qld_heritage_register
+       FROM qld_goldcoast_heritage_proximity
+       WHERE lot_plan = $1 OR ST_Intersects(geometry, ${parcelUnion})`,
+      [`${lot}/${plan}`, lot, plan]
+    ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+    gcQuery("qld_goldcoast_environmental", "id, category, cat_desc, ovl_cat, ovl2_desc, ovl2_cat"),
+    gcQuery("qld_goldcoast_buffer_area", "id"),
+    gcQuery("qld_goldcoast_dwelling_house_overlay", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat"),
+    gcQuery("qld_goldcoast_party_house", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat"),
+    gcQuery("qld_goldcoast_airport_noise", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, sensitive_use_type, buffer_source, buffer_distance"),
+  ]);
+
+  return {
+    zones: zones.rows,
+    buildingHeight: buildingHeight.rows,
+    flood: flood.rows,
+    bushfireHazard: bushfire.rows,
+    minimumLotSize: minLotSize.rows,
+    residentialDensity: residentialDensity.rows,
+    heritage: heritage.rows,
+    heritageProximity: heritageProximity.rows,
+    environmental: environmental.rows,
+    bufferArea: { intersects: bufferArea.rows.length > 0 },
+    dwellingHouseOverlay: dwellingHouseOverlay.rows,
+    partyHouse: partyHouse.rows,
+    airportNoise: airportNoise.rows,
+  };
+}
+
 async function handleLotPlanLookup(lot: string, plan: string): Promise<NextResponse> {
   const debug: Record<string, unknown> = { input: `${lot}/${plan}`, mode: "lot_plan" };
 
@@ -68,6 +119,11 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
       ]);
       debug.lga = lgaResult.rows[0] ?? null;
       debug.zoning = zoneResult.rows[0] ?? null;
+
+      const lgaName = (debug.lga as Record<string, unknown> | null)?.lga_name as string | undefined;
+      if (lgaName?.toLowerCase().includes("gold coast")) {
+        debug.goldCoast = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+      }
     } else {
       debug.error = `No parcels found for lot ${lot} / plan ${plan}`;
     }
@@ -564,6 +620,17 @@ export async function GET(req: NextRequest) {
     debug.zoning = zoneResult.rows[0] ?? null;
   } catch (err) {
     debug.lgaZoningError = err instanceof Error ? err.message : String(err);
+  }
+
+  // ── 7. Gold Coast overlays (only when LGA is Gold Coast) ────────────
+  const lgaName = (debug.lga as Record<string, unknown> | null)?.lga_name as string | undefined;
+  if (lgaName?.toLowerCase().includes("gold coast")) {
+    const topLot = spatialPrimaryRows.find((r) => r.parcel_typ === "Lot Type Parcel") ?? spatialPrimaryRows[0];
+    const lot = topLot?.lot as string | undefined;
+    const plan = topLot?.plan as string | undefined;
+    if (lot && plan) {
+      debug.goldCoast = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+    }
   }
 
   return NextResponse.json(debug);

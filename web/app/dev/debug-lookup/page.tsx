@@ -666,6 +666,7 @@ export default function DebugLookupPage() {
             <Section title="All Addresses on Plan" objKey="allAddressesOnPlan" data={data.allAddressesOnPlan} collapsed />
             <Section title="LGA" objKey="lga" data={data.lga} />
             <Section title="Zoning" objKey="zoning" data={data.zoning} />
+            <Section title="Gold Coast Overlays" objKey="goldCoast" data={data.goldCoast} collapsed />
             <Section title="Raw Validation Response" objKey="addressValidation" data={data.addressValidation} collapsed />
           </div>
         )}

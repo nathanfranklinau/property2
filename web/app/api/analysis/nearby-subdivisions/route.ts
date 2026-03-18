@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
   try {
     // Run both queries in parallel: accurate counts (no geometry) + plan details (limited)
     const [countResult, result] = await Promise.all([
-      db.query<{ within_2km: string; within_5km: string; within_10km: string; within_20km: string }>(
+      db.query<{ km0_2: string; km2_5: string; km5_10: string; km10_20: string }>(
         `WITH ${sharedCte},
          filtered AS (
            SELECT ac.dist_m
@@ -84,10 +84,10 @@ export async function GET(req: NextRequest) {
            HAVING SUM(cp.lot_area) <= 6000
          )
          SELECT
-           COUNT(*) FILTER (WHERE dist_m <= 2000)                      AS within_2km,
-           COUNT(*) FILTER (WHERE dist_m > 2000  AND dist_m <= 5000)   AS within_5km,
-           COUNT(*) FILTER (WHERE dist_m > 5000  AND dist_m <= 10000)  AS within_10km,
-           COUNT(*) FILTER (WHERE dist_m > 10000 AND dist_m <= 20000)  AS within_20km
+           COUNT(*) FILTER (WHERE dist_m >= 0     AND dist_m <  2000)  AS km0_2,
+           COUNT(*) FILTER (WHERE dist_m >= 2000  AND dist_m <  5000)  AS km2_5,
+           COUNT(*) FILTER (WHERE dist_m >= 5000  AND dist_m <  10000) AS km5_10,
+           COUNT(*) FILTER (WHERE dist_m >= 10000 AND dist_m <  20000) AS km10_20
          FROM filtered`,
         [parcelId]
       ),
@@ -127,10 +127,10 @@ export async function GET(req: NextRequest) {
 
     const cr = countResult.rows[0];
     const counts = {
-      within_2km: Number(cr?.within_2km ?? 0),
-      within_5km: Number(cr?.within_5km ?? 0),
-      within_10km: Number(cr?.within_10km ?? 0),
-      within_20km: Number(cr?.within_20km ?? 0),
+      km0_2:   Number(cr?.km0_2   ?? 0),
+      km2_5:   Number(cr?.km2_5   ?? 0),
+      km5_10:  Number(cr?.km5_10  ?? 0),
+      km10_20: Number(cr?.km10_20 ?? 0),
     };
 
     if (result.rows.length === 0) {

@@ -548,7 +548,7 @@ export default function AnalysisPage() {
   const [showNotice, setShowNotice] = useState(true);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [nearbyData, setNearbyData] = useState<{
-    counts: { within_2km: number; within_5km: number; within_10km: number; within_20km: number };
+    counts: { km0_2: number; km2_5: number; km5_10: number; km10_20: number };
     plans: NearbyPlan[];
   } | null>(null);
   const [nearbyLoading, setNearbyLoading] = useState(false);
@@ -667,7 +667,7 @@ export default function AnalysisPage() {
             .then((r) => {
               if (!r.ok) {
                 console.warn(`Nearby subdivisions API returned ${r.status}`);
-                return { counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 }, plans: [] };
+                return { counts: { km0_2: 0, km2_5: 0, km5_10: 0, km10_20: 0 }, plans: [] };
               }
               return r.json();
             })
@@ -675,7 +675,7 @@ export default function AnalysisPage() {
               // Ensure the response has the expected structure
               if (d && typeof d === 'object') {
                 setNearbyData({
-                  counts: d.counts || { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 },
+                  counts: d.counts || { km0_2: 0, km2_5: 0, km5_10: 0, km10_20: 0 },
                   plans: d.plans || []
                 });
               }
@@ -683,7 +683,7 @@ export default function AnalysisPage() {
             .catch((err) => {
               console.error("Nearby subdivisions error:", err);
               setNearbyData({
-                counts: { within_2km: 0, within_5km: 0, within_10km: 0, within_20km: 0 },
+                counts: { km0_2: 0, km2_5: 0, km5_10: 0, km10_20: 0 },
                 plans: []
               });
             })
@@ -1035,6 +1035,9 @@ export default function AnalysisPage() {
                         <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
                           {Math.round(Math.min(totalStructuresArea, status.lot_area_sqm)).toLocaleString()}
                           <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
+                          <span className="text-xs font-medium text-zinc-600 ml-1.5">
+                            {Math.round((Math.min(totalStructuresArea, status.lot_area_sqm) / status.lot_area_sqm) * 100)}%
+                          </span>
                         </p>
                       </div>
                     </>
@@ -1100,9 +1103,9 @@ export default function AnalysisPage() {
                 </SidebarSection>
               )}
 
-              {/* Property Rights */}
+              {/* Your Property */}
               <SidebarSection
-                title="Property Rights"
+                title="Your Property"
                 icon={
                   <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                     <rect x="3" y="3" width="18" height="18" rx="2" />
@@ -1111,14 +1114,14 @@ export default function AnalysisPage() {
                 }
               >
                 <SidebarRow
-                  icon={<LotIcon />}
-                  label="Lot Size"
-                  value={sqm(status.lot_area_sqm)}
-                />
-                <SidebarRow
                   icon={<PlanIcon />}
                   label="Lot / Plan"
                   value={`${status.cadastre_lot} / ${status.cadastre_plan}`}
+                />
+                <SidebarRow
+                  icon={<LotIcon />}
+                  label="Lot Size"
+                  value={sqm(status.lot_area_sqm)}
                 />
                 <SidebarRow
                   icon={<CouncilIcon />}
@@ -1126,6 +1129,31 @@ export default function AnalysisPage() {
                   value={status.lga_name ?? "—"}
                   valueColor={status.lga_name ? undefined : "text-zinc-500"}
                 />
+                {/* Zone — show from City Plan if available, otherwise from state-level data */}
+                {cityPlan?.zone ? (
+                  <div className="px-3 py-2.5">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-zinc-600"><CityPlanZoneIcon /></span>
+                      <span className="text-xs text-zinc-400">Zone</span>
+                    </div>
+                    <ZoneTooltip
+                      zoneName={cityPlan.zone.lvl1_zone}
+                      lgaName={status?.lga_name ?? null}
+                    />
+                    {cityPlan.zone.zone_precinct && (
+                      <p className="text-[10px] text-zinc-500 mt-1.5 pl-0.5">
+                        {cityPlan.zone.zone_precinct}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <SidebarRow
+                    icon={<ZoneIcon />}
+                    label="Zone"
+                    value={status.zone_name ?? "—"}
+                    valueColor={status.zone_name ? undefined : "text-zinc-500"}
+                  />
+                )}
                 {propertyType === "special_tenure" && (
                   <SidebarRow
                     icon={<ZoneIcon />}
@@ -1133,109 +1161,33 @@ export default function AnalysisPage() {
                     value={typeInfo.label}
                   />
                 )}
+                <div className="px-3 py-1.5">
+                  <a
+                    href={`https://apps.information.qld.gov.au/data/cadastre/GenerateSmartMap?q=${encodeURIComponent(`${status.cadastre_lot}\\${status.cadastre_plan}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                    View Smart Map (QLD)
+                  </a>
+                </div>
               </SidebarSection>
 
-              {/* Space Analysis — only for house/multi_dwelling */}
-              {(propertyType === "house" || propertyType === "multi_dwelling") && (
-                <SidebarSection
-                  title="Space Analysis"
-                  icon={
-                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                      <path d="M21 12a9 9 0 11-9-9" />
-                      <path d="M21 3v6h-6" />
-                    </svg>
-                  }
-                >
-                  <SidebarRow
-                    icon={<FreeSpaceIcon />}
-                    label="Free Space"
-                    value={sqm(freeSpace)}
-                    highlight
-                  />
-                  <SidebarRow
-                    icon={<StructuresIcon />}
-                    label="Total Structures"
-                    value={sqm(totalStructuresArea)}
-                  />
-                </SidebarSection>
-              )}
 
 
 
-              {/* City Plan Insights (Gold Coast only) */}
+              {/* City Plan (Gold Coast only) */}
               {cityPlan && (
                 <>
-                  {/* Development Controls */}
-                  {(cityPlan.zone || cityPlan.building_height || cityPlan.minimum_lot_size || cityPlan.residential_density) && (
-                    <SidebarSection
-                      title="Development Controls"
-                      icon={<RulerIcon />}
-                      info="Development parameters from the Gold Coast City Plan Version 13. These controls determine what can be built on this property — height limits, lot sizes, and density."
-                    >
-                      {cityPlan.zone && (
-                        <div className="px-3 py-2.5">
-                          <div className="flex items-center gap-2 mb-1.5">
-                            <span className="text-zinc-600"><CityPlanZoneIcon /></span>
-                            <span className="text-xs text-zinc-400">Zone Classification</span>
-                          </div>
-                          <ZoneTooltip
-                            zoneName={cityPlan.zone.lvl1_zone}
-                            lgaName={status?.lga_name ?? null}
-                          />
-                          {cityPlan.zone.zone_precinct && (
-                            <p className="text-[10px] text-zinc-500 mt-1.5 pl-0.5">
-                              {cityPlan.zone.zone_precinct}
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {cityPlan.building_height && (
-                        <div className="px-3 py-2.5">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className="text-zinc-600"><HeightIcon /></span>
-                              <span className="text-xs text-zinc-400">Max Building Height</span>
-                            </div>
-                            <span className={`text-xs font-bold tabular-nums ${heightColor(cityPlan.building_height.height_in_metres)}`}>
-                              {cityPlan.building_height.height_label || cityPlan.building_height.height_in_metres}
-                            </span>
-                          </div>
-                          {cityPlan.building_height.storey_number && cityPlan.building_height.storey_number !== "N/A" && (
-                            <p className="text-[10px] text-zinc-500 mt-1 pl-6">
-                              {cityPlan.building_height.storey_number} {Number(cityPlan.building_height.storey_number) === 1 ? "storey" : "storeys"} max
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {!cityPlan.building_height && cityPlan.zone?.building_height && cityPlan.zone.building_height !== "No deisgnated heights" && (
-                        <SidebarRow
-                          icon={<HeightIcon />}
-                          label="Base Height (Zone)"
-                          value={cityPlan.zone.building_height}
-                        />
-                      )}
-                      {cityPlan.minimum_lot_size && (
-                        <SidebarRow
-                          icon={<MinLotIcon />}
-                          label="Min Lot Size"
-                          value={cityPlan.minimum_lot_size.mls}
-                          highlight
-                        />
-                      )}
-                      {cityPlan.residential_density && (
-                        <SidebarRow
-                          icon={<DensityIcon />}
-                          label="Residential Density"
-                          value={cityPlan.residential_density.code}
-                          valueColor={densityColor(cityPlan.residential_density.code)}
-                        />
-                      )}
-                    </SidebarSection>
-                  )}
-
-                  {/* Constraints & Overlays */}
-                  {/* Development Insights (derived attributes) */}
+                  {/* Development Potential — merged controls + insights */}
                   {(() => {
+                    const hasControls = cityPlan.building_height || cityPlan.minimum_lot_size || cityPlan.residential_density
+                      || (!cityPlan.building_height && cityPlan.zone?.building_height && cityPlan.zone.building_height !== "No deisgnated heights");
                     const lotArea = status?.lot_area_sqm;
                     const mls = cityPlan.minimum_lot_size ? parseFloat(cityPlan.minimum_lot_size.mls) : null;
                     const subdivisibleLots = (lotArea && mls && mls > 0) ? Math.floor(lotArea / mls) : null;
@@ -1244,29 +1196,56 @@ export default function AnalysisPage() {
                     const siteCoverHeadroom = (lotArea && maxCover && totalStructuresArea != null)
                       ? Math.max(0, (maxCover * lotArea) - totalStructuresArea)
                       : null;
-                    const constraintCount = [
-                      cityPlan.flood,
-                      cityPlan.heritage,
-                      cityPlan.heritage_proximity,
-                      cityPlan.environmental_significance,
-                      cityPlan.bushfire_hazard,
-                      cityPlan.airport_noise,
-                      cityPlan.buffer_area,
-                      cityPlan.dwelling_house_overlay,
-                    ].filter(Boolean).length;
-                    const nearbyCount = nearbyData
-                      ? nearbyData.counts.within_20km
-                      : null;
-
-                    const hasInsights = subdivisibleLots !== null || siteCoverHeadroom !== null || nearbyCount !== null;
-                    if (!hasInsights) return null;
+                    const hasInsights = subdivisibleLots !== null || siteCoverHeadroom !== null || cityPlan.corner_lot;
+                    if (!hasControls && !hasInsights) return null;
 
                     return (
                       <SidebarSection
-                        title="Development Insights"
-                        icon={<InsightsIcon />}
-                        info="Derived indicators computed from planning controls, lot size, and detected structures. These are estimates — always verify with a town planner before making decisions."
+                        title="Development Potential"
+                        icon={<RulerIcon />}
+                        info="What can be built on this property — height limits, lot sizes, density, and derived indicators from the Gold Coast City Plan. These are estimates — always verify with a town planner."
                       >
+                        {cityPlan.building_height && (
+                          <div className="px-3 py-2.5">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="text-zinc-600"><HeightIcon /></span>
+                                <span className="text-xs text-zinc-400">Max Building Height</span>
+                              </div>
+                              <span className={`text-xs font-bold tabular-nums ${heightColor(cityPlan.building_height.height_in_metres)}`}>
+                                {cityPlan.building_height.height_label || cityPlan.building_height.height_in_metres}
+                              </span>
+                            </div>
+                            {cityPlan.building_height.storey_number && cityPlan.building_height.storey_number !== "N/A" && (
+                              <p className="text-[10px] text-zinc-500 mt-1 pl-6">
+                                {cityPlan.building_height.storey_number} {Number(cityPlan.building_height.storey_number) === 1 ? "storey" : "storeys"} max
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        {!cityPlan.building_height && cityPlan.zone?.building_height && cityPlan.zone.building_height !== "No deisgnated heights" && (
+                          <SidebarRow
+                            icon={<HeightIcon />}
+                            label="Base Height (Zone)"
+                            value={cityPlan.zone.building_height}
+                          />
+                        )}
+                        {cityPlan.minimum_lot_size && (
+                          <SidebarRow
+                            icon={<MinLotIcon />}
+                            label="Min Lot Size"
+                            value={cityPlan.minimum_lot_size.mls}
+                            highlight
+                          />
+                        )}
+                        {cityPlan.residential_density && (
+                          <SidebarRow
+                            icon={<DensityIcon />}
+                            label="Residential Density"
+                            value={cityPlan.residential_density.code}
+                            valueColor={densityColor(cityPlan.residential_density.code)}
+                          />
+                        )}
                         {subdivisibleLots !== null && subdivisibleLots >= 2 && (
                           <SidebarRow
                             icon={<SubdivisionPotentialIcon />}
@@ -1296,22 +1275,6 @@ export default function AnalysisPage() {
                             icon={<CornerLotIcon />}
                             label="Corner Lot"
                             value="Yes"
-                            valueColor="text-indigo-400"
-                          />
-                        )}
-                        {constraintCount > 0 && (
-                          <SidebarRow
-                            icon={<ConstraintIcon />}
-                            label="Overlay Count"
-                            value={`${constraintCount}`}
-                            valueColor={constraintCount >= 3 ? "text-red-400" : constraintCount >= 2 ? "text-amber-400" : "text-zinc-300"}
-                          />
-                        )}
-                        {nearbyCount !== null && nearbyCount > 0 && (
-                          <SidebarRow
-                            icon={<NearbyActivityIcon />}
-                            label="Nearby Subdivisions"
-                            value={`${nearbyCount} within 20km`}
                             valueColor="text-indigo-400"
                           />
                         )}
@@ -1431,7 +1394,7 @@ export default function AnalysisPage() {
                             <span className="text-sky-500"><DwellingOverlayIcon /></span>
                             <div className="flex-1 min-w-0">
                               <span className="text-xs text-zinc-400">Dwelling House Overlay</span>
-                              <p className="text-[10px] text-sky-400/80 mt-0.5">Additional setback &amp; site cover controls</p>
+                              <p className="text-[10px] text-sky-400/80 mt-0.5">Single dwelling only — unit &amp; dual-occ development requires a DA</p>
                             </div>
                           </div>
                         </div>
@@ -1491,10 +1454,10 @@ export default function AnalysisPage() {
                   </div>
                   {(
                     [
-                      { label: "Within 2 km", key: "within_2km" as const, maxDist: 2000, minDist: 0 },
-                      { label: "2 km – 5 km", key: "within_5km" as const, maxDist: 5000, minDist: 2000 },
-                      { label: "5 km – 10 km", key: "within_10km" as const, maxDist: 10000, minDist: 5000 },
-                      { label: "10 km – 20 km", key: "within_20km" as const, maxDist: 20000, minDist: 10000 },
+                      { label: "Within 2 km", key: "km0_2" as const, maxDist: 2000, minDist: 0 },
+                      { label: "2 km – 5 km", key: "km2_5" as const, maxDist: 5000, minDist: 2000 },
+                      { label: "5 km – 10 km", key: "km5_10" as const, maxDist: 10000, minDist: 5000 },
+                      { label: "10 km – 20 km", key: "km10_20" as const, maxDist: 20000, minDist: 10000 },
                     ]
                   ).map(({ label, key, maxDist, minDist }) => {
                     const searchTerm = nearbySearch.trim().toLowerCase();
@@ -1742,43 +1705,6 @@ export default function AnalysisPage() {
                 </SidebarSection>
               )}
 
-              {/* Zoning */}
-              <SidebarSection
-                title="Zoning"
-                icon={
-                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                    <polygon points="12,2 22,8.5 22,15.5 12,22 2,15.5 2,8.5" />
-                    <path d="M12 22V8.5M22 8.5L12 2 2 8.5" />
-                  </svg>
-                }
-              >
-                <SidebarRow
-                  icon={<ZoneIcon />}
-                  label="Zone"
-                  value={status.zone_name ?? "—"}
-                  valueColor={status.zone_name ? undefined : "text-zinc-500"}
-                />
-                <SidebarRow
-                  icon={<PlanIcon />}
-                  label="Lot / Plan"
-                  value={`${status.cadastre_lot} / ${status.cadastre_plan}`}
-                />
-                <div className="px-3 py-1.5">
-                  <a
-                    href={`https://apps.information.qld.gov.au/data/cadastre/GenerateSmartMap?q=${encodeURIComponent(`${status.cadastre_lot}\\${status.cadastre_plan}`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
-                  >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                      <polyline points="15 3 21 3 21 9" />
-                      <line x1="10" y1="14" x2="21" y2="3" />
-                    </svg>
-                    View Smart Map (QLD)
-                  </a>
-                </div>
-              </SidebarSection>
             </div>
           </div>
 
@@ -1952,24 +1878,6 @@ function CouncilIcon() {
       <path d="M4 7v10h16V7" />
       <path d="M4 17h16v2H4z" />
       <path d="M8 7v10M12 7v10M16 7v10" />
-    </svg>
-  );
-}
-
-function FreeSpaceIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <rect x="3" y="3" width="18" height="18" rx="2" strokeDasharray="4 2" />
-      <circle cx="12" cy="12" r="3" />
-    </svg>
-  );
-}
-
-function StructuresIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <path d="M3 21h18M5 21V11l7-5 7 5v10" />
-      <rect x="9" y="15" width="6" height="6" />
     </svg>
   );
 }
@@ -2161,15 +2069,6 @@ function ShieldIcon() {
   );
 }
 
-function InsightsIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <path d="M12 2a7 7 0 017 7c0 2.5-1.5 4.5-3 6l-1 4H9l-1-4c-1.5-1.5-3-3.5-3-6a7 7 0 017-7z" />
-      <path d="M10 21h4" />
-    </svg>
-  );
-}
-
 function SubdivisionPotentialIcon() {
   return (
     <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -2200,15 +2099,6 @@ function CornerLotIcon() {
   );
 }
 
-function NearbyActivityIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-      <circle cx="12" cy="12" r="3" />
-      <circle cx="12" cy="12" r="7" strokeDasharray="3 2" />
-      <circle cx="12" cy="12" r="11" strokeDasharray="3 2" />
-    </svg>
-  );
-}
 
 function FloodIcon() {
   return (

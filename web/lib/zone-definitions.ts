@@ -21,7 +21,7 @@ const ZONE_DEFINITIONS: Record<string, LgaZoneMap> = {
   // City Plan uses the Queensland Planning Provisions (QPP) standard instrument
   // as a basis, with local zone codes and overall outcomes applied on top.
   //
-  "Gold Coast City Council": {
+  "Gold Coast City": {
     // GC City Plan V13 — Part 5, s.5.3.1 Low density residential zone code
     "Low density residential":
       "Provides for predominantly detached dwellings and dual occupancies in " +
