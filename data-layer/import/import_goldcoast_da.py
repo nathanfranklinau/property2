@@ -363,17 +363,39 @@ JS_EXTRACT_DETAIL = """
 () => {
     const result = { fields: {}, milestones: [], documents: [], locations: [] };
 
-    // 1. Label → value pairs from <span>Label</span><span>Value</span>
-    document.querySelectorAll('span').forEach(span => {
-        const label = span.textContent.trim().replace(/:$/, '');
-        const next = span.nextElementSibling;
-        if (label && next && label.length < 100) {
-            const value = next.textContent.trim();
-            if (value && value.length < 2000) result.fields[label] = value;
+    // 1. td.ContentLabel → td.ContentData pairs (common ePathway detail layout)
+    document.querySelectorAll('td.ContentLabel, td.LabelContent, td.LabelText').forEach(labelCell => {
+        const label = labelCell.textContent.trim().replace(/:$/, '');
+        const valueCell = labelCell.nextElementSibling;
+        if (label && valueCell && label.length < 120) {
+            const value = valueCell.textContent.trim();
+            if (value) result.fields[label] = value;
         }
     });
 
-    // 2. Structured ContentPanel tables
+    // 2. Generic 2-column label/value rows in any table (tr with exactly 2 tds,
+    //    first td looks like a label — ends with colon or is short)
+    document.querySelectorAll('tr').forEach(tr => {
+        const tds = tr.querySelectorAll('td');
+        if (tds.length !== 2) return;
+        const label = tds[0].textContent.trim().replace(/:$/, '');
+        const value = tds[1].textContent.trim();
+        if (label && value && label.length < 120 && !(label in result.fields)) {
+            result.fields[label] = value;
+        }
+    });
+
+    // 3. Label → value pairs from <span>Label</span><span>Value</span>
+    document.querySelectorAll('span').forEach(span => {
+        const label = span.textContent.trim().replace(/:$/, '');
+        const next = span.nextElementSibling;
+        if (label && next && label.length < 120 && !(label in result.fields)) {
+            const value = next.textContent.trim();
+            if (value) result.fields[label] = value;
+        }
+    });
+
+    // 4. Structured ContentPanel tables
     document.querySelectorAll('table.ContentPanel').forEach(table => {
         const headerRow = table.querySelector('tr.ContentPanelHeading');
         if (!headerRow) return;
@@ -407,58 +429,82 @@ JS_EXTRACT_DETAIL = """
 
 def extract_detail_data(raw: dict) -> dict:
     """Convert the JS-extracted detail dict into DB-ready column values."""
-    fields = raw.get("fields", {})
+    # Normalise all field keys to lowercase for case-insensitive lookup
+    fields = {k.lower(): v for k, v in raw.get("fields", {}).items()}
     milestones = raw.get("milestones", [])
     documents = raw.get("documents", [])
-    locations = raw.get("locations", [])
+    # Normalise location row keys to lowercase too
+    locations = [{k.lower(): v for k, v in loc.items()} for loc in raw.get("locations", [])]
 
     out = {}
+
+    # --- Description ---
+    for key in (
+        "application description", "description", "proposal",
+        "application proposal", "development description",
+    ):
+        val = fields.get(key, "").strip()
+        if val:
+            # Strip leading lines that look like status/type prefixes
+            # (some ePathway pages concatenate status + type + description)
+            lines = [ln.strip() for ln in val.splitlines() if ln.strip()]
+            # If the first line is a known status word, drop it
+            if lines and lines[0].upper() in {s.upper() for s in TERMINAL_STATUSES} | {
+                "CURRENT ASSESSMENT", "INFORMATION REQUEST", "REFERRED",
+                "UNDER ASSESSMENT", "APPROVED", "APPROVED IN PART",
+            }:
+                lines = lines[1:]
+            out["description"] = " ".join(lines) if lines else val
+            break
+
+    # --- Status ---
+    for key in ("current status", "status", "application status"):
+        val = fields.get(key, "").strip()
+        if val:
+            out["status"] = val
+            out["monitoring_status"] = _monitoring_status_for(val)
+            break
 
     # --- Location / Lot on Plan ---
     if locations:
         loc = locations[0]
         addr = (
-            loc.get("Property Address")
-            or loc.get("Address")
-            or loc.get("Location Address")
-            or loc.get("Formatted Property Address")
+            loc.get("property address")
+            or loc.get("address")
+            or loc.get("location address")
+            or loc.get("formatted property address")
         )
         if addr:
             out["location_address"] = addr.strip()
 
-        lot = loc.get("Lot on Plan") or loc.get("Title") or loc.get("Lot/Plan")
+        lot = loc.get("lot on plan") or loc.get("title") or loc.get("lot/plan")
         if lot:
             out["lot_on_plan"] = lot.strip()
 
-        suburb = loc.get("Location Suburb") or loc.get("Suburb")
+        suburb = loc.get("location suburb") or loc.get("suburb")
         if suburb:
             out["suburb"] = suburb.strip()
 
-    # Span-based fallbacks
-    for key in ("Application location", "Application Location", "Location Address"):
+    # Field-based fallbacks for location (keyed from the span/td extraction)
+    for key in ("application location", "location address"):
         if key in fields and "location_address" not in out:
             out["location_address"] = fields[key]
-    for key in ("Lot on Plan", "Lot/Plan", "Title"):
+    for key in ("lot on plan", "lot/plan", "title"):
         if key in fields and "lot_on_plan" not in out:
             out["lot_on_plan"] = fields[key]
 
     # --- Milestones ---
     for m in milestones:
+        ml = {k.lower(): v for k, v in m.items()}
         task_type = (
-            m.get("Task/Event Type")
-            or m.get("Task/event type")
-            or m.get("Task Type")
-            or m.get("Event Type")
+            ml.get("task/event type")
+            or ml.get("task type")
+            or ml.get("event type")
             or ""
         ).lower()
 
-        started = m.get("Actual Started Date") or m.get("Actual started date") or ""
-        completed = (
-            m.get("Actual Completed Date")
-            or m.get("Actual completed date")
-            or m.get("Completed")
-            or ""
-        )
+        started = ml.get("actual started date") or ml.get("started") or ""
+        completed = ml.get("actual completed date") or ml.get("completed") or ""
 
         if "pre-assessment" in task_type or "pre assessment" in task_type:
             out["pre_assessment_started"] = parse_au_date(started)
@@ -474,11 +520,12 @@ def extract_detail_data(raw: dict) -> dict:
     if documents:
         doc_names = []
         for d in documents:
+            dl = {k.lower(): v for k, v in d.items()}
             name = (
-                d.get("Document Name")
-                or d.get("Description")
-                or d.get("Name")
-                or d.get("File Name")
+                dl.get("document name")
+                or dl.get("description")
+                or dl.get("name")
+                or dl.get("file name")
                 or ""
             )
             if name.strip():
@@ -566,12 +613,12 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
     params = {"app_num": application_number}
 
     detail_columns = [
+        "description",
         "location_address", "lot_on_plan", "suburb",
         "pre_assessment_started", "pre_assessment_completed",
         "confirmation_notice_started", "confirmation_notice_completed",
         "decision_started", "decision_completed",
         "documents_summary",
-        # monitor mode also updates these
         "status", "monitoring_status",
     ]
     for col in detail_columns:
@@ -694,7 +741,7 @@ def fill_app_number_and_search(page: Page, app_num: str) -> bool:
     return True
 
 
-def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
+def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None:
     """Visit detail pages for applications that haven't been enriched yet.
 
     Uses the Application number search tab to look up each application by
@@ -771,10 +818,15 @@ def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
             consecutive_errors = 0
 
             raw = page.evaluate(JS_EXTRACT_DETAIL)
+
+            # In debug mode, dump the raw extraction for the first record
+            if getattr(args, "debug", False) and i == 1:
+                log.info("DEBUG raw extraction:\n" + json.dumps(raw, indent=2))
+
             detail = extract_detail_data(raw)
 
             upsert_detail(conn, app_num, detail)
-            log.info(f"  Updated with {len(detail)} fields")
+            log.info(f"  Updated with {len(detail)} fields: {list(detail.keys())}")
 
         except Exception as e:
             log.error(f"  Error enriching {app_num}: {e}")
@@ -864,17 +916,10 @@ def run_monitor(page: Page, conn, limit) -> None:
 
             raw = page.evaluate(JS_EXTRACT_DETAIL)
             detail = extract_detail_data(raw)
-
-            fresh_status = raw.get("fields", {}).get("Current Status") \
-                        or raw.get("fields", {}).get("Status")
-
-            if fresh_status:
-                detail["status"] = fresh_status
-                detail["monitoring_status"] = _monitoring_status_for(fresh_status)
-
             upsert_detail(conn, app_num, detail)
             updated += 1
 
+            fresh_status = detail.get("status")
             if is_terminal(fresh_status):
                 closed += 1
                 log.info(f"  Status '{fresh_status}' → closed")
@@ -927,6 +972,8 @@ def main():
                         help="Max applications to process (--enrich / --monitor)")
     parser.add_argument("--include-closed", action="store_true",
                         help="Include closed/terminal-status apps (--enrich only)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Dump raw JS extraction for first record (--enrich)")
 
     args = parser.parse_args()
 
@@ -955,7 +1002,7 @@ def main():
 
         try:
             if args.enrich:
-                run_enrich(page, conn, args.limit, include_closed=args.include_closed)
+                run_enrich(page, conn, args.limit, include_closed=args.include_closed, args=args)
             elif args.monitor:
                 run_monitor(page, conn, args.limit)
             else:
