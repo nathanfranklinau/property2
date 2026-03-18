@@ -361,7 +361,7 @@ def scrape_summary(page: Page, from_date: date, to_date: date) -> list:
 
 JS_EXTRACT_DETAIL = """
 () => {
-    const result = { fields: {}, milestones: [], documents: [], locations: [] };
+    const result = { fields: {}, milestones: [], documents: [], locations: [], decisions: [], officers: [] };
 
     // 1. td.ContentLabel → td.ContentData pairs (common ePathway detail layout)
     document.querySelectorAll('td.ContentLabel, td.LabelContent, td.LabelText').forEach(labelCell => {
@@ -419,6 +419,11 @@ JS_EXTRACT_DETAIL = """
         } else if (joined.includes('property address') || joined.includes('location address')
                    || joined.includes('lot') || joined.includes('title')) {
             result.locations.push(...rows);
+        } else if (joined.includes('decision type') || joined.includes('decision date')
+                   || joined.includes('decision authority')) {
+            result.decisions.push(...rows);
+        } else if (joined.includes('responsible officer')) {
+            result.officers.push(...rows);
         }
     });
 
@@ -433,6 +438,8 @@ def extract_detail_data(raw: dict) -> dict:
     fields = {k.lower(): v for k, v in raw.get("fields", {}).items()}
     milestones = raw.get("milestones", [])
     documents = raw.get("documents", [])
+    decisions = raw.get("decisions", [])
+    officers = raw.get("officers", [])
     # Normalise location row keys to lowercase too
     locations = [{k.lower(): v for k, v in loc.items()} for loc in raw.get("locations", [])]
 
@@ -465,6 +472,20 @@ def extract_detail_data(raw: dict) -> dict:
             out["monitoring_status"] = _monitoring_status_for(val)
             break
 
+    # --- Responsible officer ---
+    if officers:
+        ol = {k.lower(): v for k, v in officers[0].items()}
+        officer_name = ol.get("responsible officer") or ol.get("officer") or ol.get("name")
+        if officer_name and officer_name.strip():
+            out["responsible_officer"] = officer_name.strip()
+    # fallback from fields
+    if "responsible_officer" not in out:
+        for key in ("responsible officer", "officer"):
+            val = fields.get(key, "").strip()
+            if val:
+                out["responsible_officer"] = val
+                break
+
     # --- Location / Lot on Plan ---
     if locations:
         loc = locations[0]
@@ -493,7 +514,11 @@ def extract_detail_data(raw: dict) -> dict:
         if key in fields and "lot_on_plan" not in out:
             out["lot_on_plan"] = fields[key]
 
-    # --- Milestones ---
+    # --- Workflow events (all rows stored as JSONB) ---
+    if milestones:
+        out["workflow_events"] = json.dumps(milestones)
+
+    # --- Milestone dates (keep the specific columns for easy querying) ---
     for m in milestones:
         ml = {k.lower(): v for k, v in m.items()}
         task_type = (
@@ -501,7 +526,7 @@ def extract_detail_data(raw: dict) -> dict:
             or ml.get("task type")
             or ml.get("event type")
             or ""
-        ).lower()
+        ).lower().strip()
 
         started = ml.get("actual started date") or ml.get("started") or ""
         completed = ml.get("actual completed date") or ml.get("completed") or ""
@@ -512,9 +537,31 @@ def extract_detail_data(raw: dict) -> dict:
         elif "confirmation" in task_type:
             out["confirmation_notice_started"] = parse_au_date(started)
             out["confirmation_notice_completed"] = parse_au_date(completed)
-        elif "decision" in task_type:
+        elif task_type == "decision":
             out["decision_started"] = parse_au_date(started)
             out["decision_completed"] = parse_au_date(completed)
+        elif "decision - approved" in task_type or "decision-approved" in task_type:
+            out["decision_approved_started"] = parse_au_date(started)
+            out["decision_approved_completed"] = parse_au_date(completed)
+        elif "issue decision" in task_type:
+            out["issue_decision_started"] = parse_au_date(started)
+            out["issue_decision_completed"] = parse_au_date(completed)
+        elif "appeal period" in task_type or "applicant appeal" in task_type:
+            out["appeal_period_started"] = parse_au_date(started)
+            out["appeal_period_completed"] = parse_au_date(completed)
+
+    # --- Decision table ---
+    if decisions:
+        dl = {k.lower(): v for k, v in decisions[0].items()}
+        decision_type = dl.get("decision type") or dl.get("type")
+        decision_date = dl.get("decision date") or dl.get("date")
+        decision_auth = dl.get("decision authority") or dl.get("authority")
+        if decision_type and decision_type.strip():
+            out["decision_type"] = decision_type.strip()
+        if decision_date:
+            out["decision_date"] = parse_au_date(decision_date)
+        if decision_auth and decision_auth.strip():
+            out["decision_authority"] = decision_auth.strip()
 
     # --- Documents ---
     if documents:
@@ -615,9 +662,15 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
     detail_columns = [
         "description",
         "location_address", "lot_on_plan", "suburb",
+        "responsible_officer",
+        "workflow_events",
         "pre_assessment_started", "pre_assessment_completed",
         "confirmation_notice_started", "confirmation_notice_completed",
         "decision_started", "decision_completed",
+        "decision_approved_started", "decision_approved_completed",
+        "issue_decision_started", "issue_decision_completed",
+        "appeal_period_started", "appeal_period_completed",
+        "decision_type", "decision_date", "decision_authority",
         "documents_summary",
         "status", "monitoring_status",
     ]
