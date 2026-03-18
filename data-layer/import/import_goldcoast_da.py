@@ -801,21 +801,37 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
     its application number, then clicks through to the detail page.
     """
     cur = conn.cursor()
-    conditions = ["detail_scraped_at IS NULL"]
-    if not include_closed:
-        conditions.append("monitoring_status = 'active'")
 
-    sql = f"""
-        SELECT application_number
-        FROM goldcoast_dev_applications
-        WHERE {' AND '.join(conditions)}
-        ORDER BY lodgement_date DESC NULLS LAST
-    """
-    if limit:
-        sql += f" LIMIT {int(limit)}"
+    # --app overrides all filters — always re-enrich that one record
+    target_app = getattr(args, "app", None)
+    if target_app:
+        cur.execute(
+            "SELECT application_number FROM goldcoast_dev_applications "
+            "WHERE application_number = %s",
+            (target_app,),
+        )
+        row = cur.fetchone()
+        if not row:
+            log.error(f"Application '{target_app}' not found in database")
+            return
+        rows = [row[0]]
+    else:
+        conditions = ["detail_scraped_at IS NULL"]
+        if not include_closed:
+            conditions.append("monitoring_status = 'active'")
 
-    cur.execute(sql)
-    rows = [r[0] for r in cur.fetchall()]
+        sql = f"""
+            SELECT application_number
+            FROM goldcoast_dev_applications
+            WHERE {' AND '.join(conditions)}
+            ORDER BY lodgement_date DESC NULLS LAST
+        """
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+
+        cur.execute(sql)
+        rows = [r[0] for r in cur.fetchall()]
+
     log.info(f"{len(rows)} applications to enrich")
 
     setup_session(page)
@@ -1025,6 +1041,8 @@ def main():
                         help="Max applications to process (--enrich / --monitor)")
     parser.add_argument("--include-closed", action="store_true",
                         help="Include closed/terminal-status apps (--enrich only)")
+    parser.add_argument("--app", type=str, metavar="APP_NUMBER",
+                        help="Enrich a specific application number (bypasses all filters)")
     parser.add_argument("--debug", action="store_true",
                         help="Dump raw JS extraction for first record (--enrich)")
 
