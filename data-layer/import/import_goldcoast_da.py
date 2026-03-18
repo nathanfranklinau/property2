@@ -75,6 +75,10 @@ DEFAULT_DELAY = 1.5  # seconds between page navigations
 # Delay between pages — overridden by --delay flag
 DELAY = DEFAULT_DELAY
 
+# EnquiryListId for "Development applications after July 2017" on Gold Coast.
+# Present in all detail page URLs:  EnquiryDetailView.aspx?Id=XXX&EnquiryListId=102
+ENRICH_LIST_ID = 102
+
 # Terminal statuses — applications in these states are "closed" and
 # do not need further monitoring.  Comparison is case-insensitive.
 TERMINAL_STATUSES = {
@@ -300,15 +304,21 @@ def parse_results_table(page: Page) -> list:
 
         record = dict(zip(headers, values))
 
-        # Capture the detail-page link (relative URL — works within session)
+        # Capture the detail-page link and extract the numeric Id
         link = row.locator("a")
         if link.count() > 0:
             href = link.first.get_attribute("href")
             if href:
                 record["_detail_url"] = href
+                m = re.search(r"[?&]Id=(\d+)", href, re.IGNORECASE)
+                if m:
+                    record["_epathway_id"] = int(m.group(1))
 
         normalised = normalise_columns(record)
         if normalised.get("application_number"):
+            # Promote private key to named field
+            if "_epathway_id" in normalised:
+                normalised["epathway_id"] = normalised.pop("_epathway_id")
             results.append(normalised)
 
     return results
@@ -498,11 +508,11 @@ def upsert_summary(conn, records: list) -> int:
         INSERT INTO goldcoast_dev_applications
             (application_number, description, application_type,
              lodgement_date, status, suburb, location_address,
-             monitoring_status, last_scraped_at)
+             epathway_id, monitoring_status, last_scraped_at)
         VALUES
             (%(application_number)s, %(description)s, %(application_type)s,
              %(lodgement_date)s, %(status)s, %(suburb)s, %(location_address)s,
-             %(monitoring_status)s, NOW())
+             %(epathway_id)s, %(monitoring_status)s, NOW())
         ON CONFLICT (application_number) DO UPDATE SET
             description      = COALESCE(EXCLUDED.description, goldcoast_dev_applications.description),
             application_type = COALESCE(EXCLUDED.application_type, goldcoast_dev_applications.application_type),
@@ -510,6 +520,7 @@ def upsert_summary(conn, records: list) -> int:
             status           = COALESCE(EXCLUDED.status, goldcoast_dev_applications.status),
             suburb           = COALESCE(EXCLUDED.suburb, goldcoast_dev_applications.suburb),
             location_address = COALESCE(EXCLUDED.location_address, goldcoast_dev_applications.location_address),
+            epathway_id      = COALESCE(EXCLUDED.epathway_id, goldcoast_dev_applications.epathway_id),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
                 WHEN goldcoast_dev_applications.status IS DISTINCT FROM EXCLUDED.status
@@ -535,6 +546,7 @@ def upsert_summary(conn, records: list) -> int:
             "status": status,
             "suburb": rec.get("suburb"),
             "location_address": rec.get("location_address"),
+            "epathway_id": rec.get("epathway_id"),
             "monitoring_status": _monitoring_status_for(status),
         }
         cur.execute(sql, params)
@@ -559,11 +571,22 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         "confirmation_notice_started", "confirmation_notice_completed",
         "decision_started", "decision_completed",
         "documents_summary",
+        # monitor mode also updates these
+        "status", "monitoring_status",
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
             sets.append(f"{col} = %({col})s")
             params[col] = detail[col]
+
+    # Track when status changes
+    if "status" in params:
+        sets.append(
+            "status_changed_at = CASE "
+            "WHEN goldcoast_dev_applications.status IS DISTINCT FROM %(status)s "
+            "THEN NOW() "
+            "ELSE goldcoast_dev_applications.status_changed_at END"
+        )
 
     sql = f"""
         UPDATE goldcoast_dev_applications
@@ -609,11 +632,73 @@ def run_scrape(page: Page, conn, args) -> None:
     log.info(f"Scrape complete. Total upserted: {total_upserted}")
 
 
+def is_error_page(page: Page) -> bool:
+    """Return True if ePathway returned its standard error page."""
+    return (
+        page.locator("img[src*='error.gif']").count() > 0
+        or "encountered an error" in page.content().lower()
+    )
+
+
+def click_app_number_tab(page: Page) -> bool:
+    """Click the Application number search tab. Returns True if found."""
+    labels = [
+        "Application number search",
+        "Application Number Search",
+        "Number search",
+        "Application Number",
+        "Licence/Application Number",
+    ]
+    for label in labels:
+        tab = page.locator(f"a:has-text('{label}')")
+        if tab.count() > 0:
+            tab.first.click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(0.5)
+            log.debug(f"Clicked tab: {label}")
+            return True
+    log.warning("Application number search tab not found")
+    return False
+
+
+def fill_app_number_and_search(page: Page, app_num: str) -> bool:
+    """Fill the Licence/application number field and submit. Returns True on success."""
+    selectors = [
+        "input[name*='LicenceNumber' i]",
+        "input[id*='LicenceNumber' i]",
+        "input[name*='ApplicationNumber' i]",
+        "input[id*='ApplicationNumber' i]",
+        "input[name*='Number' i]",
+    ]
+    field = None
+    for sel in selectors:
+        loc = page.locator(sel)
+        if loc.count() > 0:
+            field = loc.first
+            break
+    if field is None:
+        log.warning("Could not find Licence/application number input field")
+        return False
+
+    field.fill("")
+    field.fill(app_num)
+
+    search_btn = page.locator("input[value='Search']")
+    if search_btn.count() == 0:
+        log.warning("Could not find Search button")
+        return False
+
+    search_btn.click()
+    page.wait_for_load_state("networkidle")
+    time.sleep(DELAY)
+    return True
+
+
 def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
     """Visit detail pages for applications that haven't been enriched yet.
 
-    By default skips closed (terminal-status) applications since their data
-    won't change.  Use --include-closed to force enrichment of those too.
+    Uses the Application number search tab to look up each application by
+    its application number, then clicks through to the detail page.
     """
     cur = conn.cursor()
     conditions = ["detail_scraped_at IS NULL"]
@@ -630,43 +715,61 @@ def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
         sql += f" LIMIT {int(limit)}"
 
     cur.execute(sql)
-    app_numbers = [row[0] for row in cur.fetchall()]
-    log.info(f"{len(app_numbers)} applications to enrich")
+    rows = [r[0] for r in cur.fetchall()]
+    log.info(f"{len(rows)} applications to enrich")
 
-    for i, app_num in enumerate(app_numbers, 1):
+    setup_session(page)
+    search_page_url = page.url
+    log.info(f"Search page URL: {search_page_url}")
+
+    consecutive_errors = 0
+
+    for i, app_num in enumerate(rows, 1):
         try:
-            log.info(f"[{i}/{len(app_numbers)}] {app_num}")
+            log.info(f"[{i}/{len(rows)}] {app_num}")
 
-            # Fresh session → search by application number
-            setup_session(page)
-
-            # Fill the application-number field (first/default tab)
-            num_field = page.locator(
-                "input[name*='FormattedNumber'], "
-                "input[name*='NumberTextBox'], "
-                "input[name*='ApplicationNumber']"
-            )
-            if num_field.count() == 0:
-                # Broadest fallback: first visible text input
-                num_field = page.locator("input[type='text']:visible")
-            num_field.first.fill(app_num)
-
-            page.locator("input[value='Search']").click()
-            page.wait_for_load_state("networkidle")
+            # Navigate back to search page for each application
+            page.goto(search_page_url, wait_until="networkidle", timeout=30000)
             time.sleep(DELAY)
 
-            # Click into the result
-            result_link = page.locator("table.ContentPanel a")
-            if result_link.count() == 0:
-                log.warning(f"  No result found — skipping")
-                upsert_detail(conn, app_num, {})
+            # If session expired we'll have been redirected away from the search page
+            if "EnquirySearch.aspx" not in page.url:
+                log.warning("  Redirected away from search page — re-establishing session")
+                setup_session(page)
+                search_page_url = page.url
+
+            # Click Application number search tab
+            if not click_app_number_tab(page):
+                log.warning(f"  Application number tab not found — skipping")
+                consecutive_errors += 1
                 continue
 
-            result_link.first.click()
+            # Fill app number and search
+            if not fill_app_number_and_search(page, app_num):
+                log.warning(f"  Search failed — skipping")
+                consecutive_errors += 1
+                continue
+
+            # Click on the application number link in results
+            link = page.locator(f"a:has-text('{app_num}')")
+            if link.count() == 0:
+                log.warning(f"  No result link found for {app_num} — skipping")
+                upsert_detail(conn, app_num, {})
+                consecutive_errors += 1
+                continue
+
+            link.first.click()
             page.wait_for_load_state("networkidle")
             time.sleep(DELAY)
 
-            # Extract detail data via JS
+            if is_error_page(page):
+                log.warning(f"  Error page on detail — skipping")
+                upsert_detail(conn, app_num, {})
+                consecutive_errors += 1
+                continue
+
+            consecutive_errors = 0
+
             raw = page.evaluate(JS_EXTRACT_DETAIL)
             detail = extract_detail_data(raw)
 
@@ -675,7 +778,15 @@ def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
 
         except Exception as e:
             log.error(f"  Error enriching {app_num}: {e}")
-            # Mark as attempted so we don't retry endlessly
+            consecutive_errors += 1
+            if consecutive_errors >= 3:
+                log.warning("  3 consecutive errors — re-establishing session")
+                try:
+                    setup_session(page)
+                    search_page_url = page.url
+                    consecutive_errors = 0
+                except Exception as se:
+                    log.error(f"  Could not re-establish session: {se}")
             try:
                 upsert_detail(conn, app_num, {})
             except Exception:
@@ -688,10 +799,9 @@ def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
 def run_monitor(page: Page, conn, limit) -> None:
     """Re-check active (non-terminal) applications for status/detail changes.
 
-    Searches each active application by number, reads the summary row for
-    a fresh status, then visits the detail page for updated milestones,
-    documents, etc.  Applications that have reached a terminal status are
-    automatically marked 'closed'.
+    Uses the Application number search tab to look up each application, then
+    reads current status from the detail page.  Applications that reach a
+    terminal status are marked 'closed' and excluded from future monitor runs.
     """
     cur = conn.cursor()
     sql = """
@@ -704,62 +814,85 @@ def run_monitor(page: Page, conn, limit) -> None:
         sql += f" LIMIT {int(limit)}"
 
     cur.execute(sql)
-    app_numbers = [row[0] for row in cur.fetchall()]
-    log.info(f"{len(app_numbers)} active applications to monitor")
+    rows = [r[0] for r in cur.fetchall()]
+    log.info(f"{len(rows)} active applications to monitor")
 
+    setup_session(page)
+    search_page_url = page.url
+    consecutive_errors = 0
     updated = 0
     closed = 0
-    for i, app_num in enumerate(app_numbers, 1):
+
+    for i, app_num in enumerate(rows, 1):
         try:
-            log.info(f"[{i}/{len(app_numbers)}] {app_num}")
+            log.info(f"[{i}/{len(rows)}] {app_num}")
 
-            # Fresh session → search by application number
-            setup_session(page)
+            page.goto(search_page_url, wait_until="networkidle", timeout=30000)
+            time.sleep(DELAY)
 
-            num_field = page.locator(
-                "input[name*='FormattedNumber'], "
-                "input[name*='NumberTextBox'], "
-                "input[name*='ApplicationNumber']"
-            )
-            if num_field.count() == 0:
-                num_field = page.locator("input[type='text']:visible")
-            num_field.first.fill(app_num)
+            if "EnquirySearch.aspx" not in page.url:
+                log.warning("  Redirected away from search page — re-establishing session")
+                setup_session(page)
+                search_page_url = page.url
 
-            page.locator("input[value='Search']").click()
+            if not click_app_number_tab(page):
+                log.warning(f"  Application number tab not found — skipping")
+                consecutive_errors += 1
+                continue
+
+            if not fill_app_number_and_search(page, app_num):
+                log.warning(f"  Search failed — skipping")
+                consecutive_errors += 1
+                continue
+
+            link = page.locator(f"a:has-text('{app_num}')")
+            if link.count() == 0:
+                log.warning(f"  No result link found for {app_num} — skipping")
+                consecutive_errors += 1
+                continue
+
+            link.first.click()
             page.wait_for_load_state("networkidle")
             time.sleep(DELAY)
 
-            # Read summary row for fresh status
-            summary_records = parse_results_table(page)
-            fresh_status = None
-            for rec in summary_records:
-                normalised = rec if "application_number" in rec else normalise_columns(rec)
-                if normalised.get("application_number") == app_num:
-                    fresh_status = normalised.get("status")
-                    # Upsert the summary (updates status, status_changed_at, monitoring_status)
-                    upsert_summary(conn, [normalised])
-                    break
+            if is_error_page(page):
+                log.warning(f"  Error page on detail — skipping")
+                consecutive_errors += 1
+                continue
 
-            # Click into the detail page
-            result_link = page.locator("table.ContentPanel a")
-            if result_link.count() > 0:
-                result_link.first.click()
-                page.wait_for_load_state("networkidle")
-                time.sleep(DELAY)
+            consecutive_errors = 0
 
-                raw = page.evaluate(JS_EXTRACT_DETAIL)
-                detail = extract_detail_data(raw)
-                upsert_detail(conn, app_num, detail)
+            raw = page.evaluate(JS_EXTRACT_DETAIL)
+            detail = extract_detail_data(raw)
 
+            fresh_status = raw.get("fields", {}).get("Current Status") \
+                        or raw.get("fields", {}).get("Status")
+
+            if fresh_status:
+                detail["status"] = fresh_status
+                detail["monitoring_status"] = _monitoring_status_for(fresh_status)
+
+            upsert_detail(conn, app_num, detail)
             updated += 1
+
             if is_terminal(fresh_status):
                 closed += 1
                 log.info(f"  Status '{fresh_status}' → closed")
             else:
-                log.info(f"  Status '{fresh_status}' → still active")
+                display_status = fresh_status or "unknown"
+                log.info(f"  Status '{display_status}' → still active")
 
         except Exception as e:
             log.error(f"  Error monitoring {app_num}: {e}")
+            consecutive_errors += 1
+            if consecutive_errors >= 3:
+                log.warning("  3 consecutive errors — re-establishing session")
+                try:
+                    setup_session(page)
+                    search_page_url = page.url
+                    consecutive_errors = 0
+                except Exception as se:
+                    log.error(f"  Could not re-establish session: {se}")
             continue
 
     log.info(f"Monitor complete. Updated: {updated}, newly closed: {closed}")
