@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""Import Gold Coast development applications from ePathway PD Online.
+
+Uses Playwright browser automation to scrape the Gold Coast City Council
+ePathway portal for development application data.
+
+Three operating modes:
+
+  SCRAPE  — collect application summary data from the results table.
+            Supports full (July 2017 → now) or delta (last N days).
+
+  ENRICH  — visit detail pages for applications already in the DB to
+            fill in lot-on-plan, milestones, and documents.
+
+  MONITOR — re-check active (non-terminal) applications for status
+            and detail changes.  Applications that reach a terminal
+            status (Completed, Withdrawn, Refused, Lapsed, etc.) are
+            automatically marked 'closed' and excluded from future
+            monitor runs.
+
+Usage:
+    # Delta — last 30 days (default)
+    python import_goldcoast_da.py
+
+    # Full import (July 2017 → now, month by month)
+    python import_goldcoast_da.py --full
+
+    # Specific date range
+    python import_goldcoast_da.py --from-date 2024-01-01 --to-date 2024-06-30
+
+    # Enrich detail data for un-enriched active applications
+    python import_goldcoast_da.py --enrich
+    python import_goldcoast_da.py --enrich --limit 50
+    python import_goldcoast_da.py --enrich --include-closed
+
+    # Monitor active applications for updates
+    python import_goldcoast_da.py --monitor
+    python import_goldcoast_da.py --monitor --limit 100
+
+    # Show the browser (for debugging)
+    python import_goldcoast_da.py --days 7 --headed
+
+Prerequisites:
+    pip install playwright psycopg2-binary python-dotenv
+    playwright install chromium
+"""
+
+import argparse
+import json
+import logging
+import os
+import re
+import time
+from datetime import date, datetime, timedelta
+
+import psycopg2
+import psycopg2.extras
+from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright, Page
+
+load_dotenv()
+
+log = logging.getLogger("import_goldcoast_da")
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+BASE_URL = "https://cogc.cloud.infor.com/ePathway/epthprod/Web"
+ENQUIRY_URL = f"{BASE_URL}/GeneralEnquiry"
+LIST_URL = f"{ENQUIRY_URL}/EnquiryLists.aspx?ModuleCode=LAP"
+
+FULL_START_DATE = date(2017, 7, 1)
+BATCH_SIZE = 200
+DEFAULT_DELAY = 1.5  # seconds between page navigations
+
+# Delay between pages — overridden by --delay flag
+DELAY = DEFAULT_DELAY
+
+# Terminal statuses — applications in these states are "closed" and
+# do not need further monitoring.  Comparison is case-insensitive.
+TERMINAL_STATUSES = {
+    "completed",
+    "finalised",
+    "decided",
+    "withdrawn",
+    "lapsed",
+    "refused",
+    "cancelled",
+    "not properly made",
+    "closed",
+}
+
+
+def is_terminal(status: str | None) -> bool:
+    """Return True if this status means the application lifecycle is over."""
+    if not status:
+        return False
+    return status.strip().lower() in TERMINAL_STATUSES
+
+# ── Column-name normalisation (ePathway varies per installation) ─────────────
+
+COLUMN_MAP = {
+    # Application number
+    "app no.": "application_number",
+    "application": "application_number",
+    "application no": "application_number",
+    "application number": "application_number",
+    "number": "application_number",
+    "our reference": "application_number",
+    # Description
+    "application description": "description",
+    "application proposal": "description",
+    "description": "description",
+    "proposal": "description",
+    # Type
+    "type": "application_type",
+    "application type": "application_type",
+    "type of application": "application_type",
+    # Lodgement date
+    "application date": "lodgement_date",
+    "date": "lodgement_date",
+    "date lodged": "lodgement_date",
+    "date received": "lodgement_date",
+    "date registered": "lodgement_date",
+    "lodged": "lodgement_date",
+    "lodge date": "lodgement_date",
+    "lodgement date": "lodgement_date",
+    "submitted": "lodgement_date",
+    # Status
+    "current status": "status",
+    "status": "status",
+    # Address
+    "address": "location_address",
+    "application location": "location_address",
+    "location": "location_address",
+    "location address": "location_address",
+    "primary property address": "location_address",
+    "property address": "location_address",
+    "site address": "location_address",
+    "site location": "location_address",
+    "street address": "location_address",
+    # Suburb
+    "suburb": "suburb",
+    "location suburb": "suburb",
+}
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def get_connection():
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        dbname=os.getenv("POSTGRES_DB", "subdivide"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+    )
+
+
+def parse_au_date(s: str):
+    """Parse DD/MM/YYYY → date, or return None."""
+    if not s or not s.strip():
+        return None
+    try:
+        return datetime.strptime(s.strip(), "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def normalise_columns(row: dict) -> dict:
+    """Map raw ePathway column headers to our DB column names."""
+    result = {}
+    for key, value in row.items():
+        if key.startswith("_"):
+            result[key] = value
+            continue
+        mapped = COLUMN_MAP.get(key.lower().strip())
+        if mapped:
+            result[mapped] = value.strip() if value else None
+    return result
+
+
+def month_ranges(start: date, end: date) -> list:
+    """Split a date span into per-month (from, to) pairs."""
+    ranges = []
+    current = start
+    while current <= end:
+        month_end = (current.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+        if month_end > end:
+            month_end = end
+        ranges.append((current, month_end))
+        current = month_end + timedelta(days=1)
+    return ranges
+
+
+# ── Browser helpers ──────────────────────────────────────────────────────────
+
+def setup_session(page: Page) -> None:
+    """Navigate through enquiry list → search page for DA after July 2017."""
+    log.info("Setting up ePathway session …")
+    page.goto(LIST_URL, wait_until="networkidle", timeout=60000)
+    time.sleep(DELAY)
+
+    # Select first radio button ("Development applications after July 2017")
+    radios = page.locator("input[type='radio']")
+    if radios.count() == 0:
+        raise RuntimeError("No radio buttons found on enquiry list page")
+    radios.first.check()
+    log.info("Selected: Development applications after July 2017")
+
+    # Click Next / Continue
+    btn = page.locator("input[value='Next']")
+    if btn.count() == 0:
+        btn = page.locator("input[value='Continue']")
+    btn.click()
+    page.wait_for_load_state("networkidle")
+    time.sleep(DELAY)
+    log.info("On search page")
+
+
+def click_date_tab(page: Page) -> None:
+    """Click the date-range search tab."""
+    labels = [
+        "Lodgement Date", "Date Search", "Date Range",
+        "Date Lodged", "Search by Date Range",
+        "Date range search", "Search by date range",
+    ]
+    for label in labels:
+        tab = page.locator(f"a:has-text('{label}')")
+        if tab.count() > 0:
+            tab.first.click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(0.5)
+            log.info(f"Clicked date tab: {label}")
+            return
+    log.warning("Date tab not found — using default search view")
+
+
+def search_by_dates(page: Page, from_date: date, to_date: date) -> None:
+    """Fill date fields and submit."""
+    log.info(f"Searching {from_date} → {to_date}")
+
+    from_sel = "input[name*='FromDate' i]"
+    to_sel = "input[name*='ToDate' i]"
+
+    from_field = page.locator(from_sel)
+    to_field = page.locator(to_sel)
+
+    if from_field.count() == 0 or to_field.count() == 0:
+        # Broader fallback
+        from_field = page.locator("input[id*='FromDate']")
+        to_field = page.locator("input[id*='ToDate']")
+
+    from_field.first.fill("")
+    from_field.first.fill(from_date.strftime("%d/%m/%Y"))
+    to_field.first.fill("")
+    to_field.first.fill(to_date.strftime("%d/%m/%Y"))
+
+    page.locator("input[value='Search']").click()
+    page.wait_for_load_state("networkidle")
+    time.sleep(DELAY)
+
+
+def get_total_pages(page: Page) -> int:
+    label = page.locator("#ctl00_MainBodyContent_mPagingControl_pageNumberLabel")
+    if label.count() > 0:
+        text = label.text_content()
+        m = re.search(r"Page\s+\d+\s+of\s+(\d+)", text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+    return 1
+
+
+def parse_results_table(page: Page) -> list:
+    """Parse the summary table on the current results page."""
+    table = page.locator("table.ContentPanel")
+    if table.count() == 0:
+        return []
+
+    # Headers
+    header_row = table.first.locator("tr.ContentPanelHeading")
+    if header_row.count() == 0:
+        return []
+
+    ths = header_row.first.locator("th")
+    headers = [ths.nth(i).text_content().strip() for i in range(ths.count())]
+    if not headers:
+        return []
+
+    # Data rows
+    rows_loc = table.first.locator("tr.ContentPanel, tr.AlternateContentPanel")
+    results = []
+
+    for i in range(rows_loc.count()):
+        row = rows_loc.nth(i)
+        cells = row.locator("td")
+        values = [cells.nth(j).text_content().strip() for j in range(cells.count())]
+
+        if len(values) != len(headers):
+            continue
+
+        record = dict(zip(headers, values))
+
+        # Capture the detail-page link (relative URL — works within session)
+        link = row.locator("a")
+        if link.count() > 0:
+            href = link.first.get_attribute("href")
+            if href:
+                record["_detail_url"] = href
+
+        normalised = normalise_columns(record)
+        if normalised.get("application_number"):
+            results.append(normalised)
+
+    return results
+
+
+# ── Summary scraper ──────────────────────────────────────────────────────────
+
+def scrape_summary(page: Page, from_date: date, to_date: date) -> list:
+    """Set up session, search by date range, parse all result pages."""
+    setup_session(page)
+    click_date_tab(page)
+    search_by_dates(page, from_date, to_date)
+
+    total_pages = get_total_pages(page)
+    log.info(f"  {total_pages} page(s) of results")
+
+    all_records = []
+
+    # Page 1 is already loaded
+    records = parse_results_table(page)
+    all_records.extend(records)
+    if total_pages > 1:
+        log.info(f"  Page 1/{total_pages}: {len(records)} rows")
+
+    # Remaining pages (direct GET with PageNumber)
+    for n in range(2, total_pages + 1):
+        page.goto(
+            f"{ENQUIRY_URL}/EnquirySummaryView.aspx?PageNumber={n}",
+            wait_until="networkidle",
+        )
+        time.sleep(DELAY)
+        records = parse_results_table(page)
+        all_records.extend(records)
+        log.info(f"  Page {n}/{total_pages}: {len(records)} rows")
+
+    return all_records
+
+
+# ── Detail scraper ───────────────────────────────────────────────────────────
+
+JS_EXTRACT_DETAIL = """
+() => {
+    const result = { fields: {}, milestones: [], documents: [], locations: [] };
+
+    // 1. Label → value pairs from <span>Label</span><span>Value</span>
+    document.querySelectorAll('span').forEach(span => {
+        const label = span.textContent.trim().replace(/:$/, '');
+        const next = span.nextElementSibling;
+        if (label && next && label.length < 100) {
+            const value = next.textContent.trim();
+            if (value && value.length < 2000) result.fields[label] = value;
+        }
+    });
+
+    // 2. Structured ContentPanel tables
+    document.querySelectorAll('table.ContentPanel').forEach(table => {
+        const headerRow = table.querySelector('tr.ContentPanelHeading');
+        if (!headerRow) return;
+
+        const headers = [...headerRow.querySelectorAll('th')].map(th => th.textContent.trim());
+        const rows = [];
+
+        table.querySelectorAll('tr.ContentPanel, tr.AlternateContentPanel').forEach(tr => {
+            const cells = [...tr.querySelectorAll('td')].map(td => td.textContent.trim());
+            const row = {};
+            headers.forEach((h, i) => { if (cells[i] !== undefined) row[h] = cells[i]; });
+            rows.push(row);
+        });
+
+        const joined = headers.map(h => h.toLowerCase()).join('|');
+
+        if (joined.includes('task') || joined.includes('event')) {
+            result.milestones.push(...rows);
+        } else if (joined.includes('document') || joined.includes('attachment') || joined.includes('file name')) {
+            result.documents.push(...rows);
+        } else if (joined.includes('property address') || joined.includes('location address')
+                   || joined.includes('lot') || joined.includes('title')) {
+            result.locations.push(...rows);
+        }
+    });
+
+    return result;
+}
+"""
+
+
+def extract_detail_data(raw: dict) -> dict:
+    """Convert the JS-extracted detail dict into DB-ready column values."""
+    fields = raw.get("fields", {})
+    milestones = raw.get("milestones", [])
+    documents = raw.get("documents", [])
+    locations = raw.get("locations", [])
+
+    out = {}
+
+    # --- Location / Lot on Plan ---
+    if locations:
+        loc = locations[0]
+        addr = (
+            loc.get("Property Address")
+            or loc.get("Address")
+            or loc.get("Location Address")
+            or loc.get("Formatted Property Address")
+        )
+        if addr:
+            out["location_address"] = addr.strip()
+
+        lot = loc.get("Lot on Plan") or loc.get("Title") or loc.get("Lot/Plan")
+        if lot:
+            out["lot_on_plan"] = lot.strip()
+
+        suburb = loc.get("Location Suburb") or loc.get("Suburb")
+        if suburb:
+            out["suburb"] = suburb.strip()
+
+    # Span-based fallbacks
+    for key in ("Application location", "Application Location", "Location Address"):
+        if key in fields and "location_address" not in out:
+            out["location_address"] = fields[key]
+    for key in ("Lot on Plan", "Lot/Plan", "Title"):
+        if key in fields and "lot_on_plan" not in out:
+            out["lot_on_plan"] = fields[key]
+
+    # --- Milestones ---
+    for m in milestones:
+        task_type = (
+            m.get("Task/Event Type")
+            or m.get("Task/event type")
+            or m.get("Task Type")
+            or m.get("Event Type")
+            or ""
+        ).lower()
+
+        started = m.get("Actual Started Date") or m.get("Actual started date") or ""
+        completed = (
+            m.get("Actual Completed Date")
+            or m.get("Actual completed date")
+            or m.get("Completed")
+            or ""
+        )
+
+        if "pre-assessment" in task_type or "pre assessment" in task_type:
+            out["pre_assessment_started"] = parse_au_date(started)
+            out["pre_assessment_completed"] = parse_au_date(completed)
+        elif "confirmation" in task_type:
+            out["confirmation_notice_started"] = parse_au_date(started)
+            out["confirmation_notice_completed"] = parse_au_date(completed)
+        elif "decision" in task_type:
+            out["decision_started"] = parse_au_date(started)
+            out["decision_completed"] = parse_au_date(completed)
+
+    # --- Documents ---
+    if documents:
+        doc_names = []
+        for d in documents:
+            name = (
+                d.get("Document Name")
+                or d.get("Description")
+                or d.get("Name")
+                or d.get("File Name")
+                or ""
+            )
+            if name.strip():
+                doc_names.append(name.strip())
+        if doc_names:
+            out["documents_summary"] = json.dumps(doc_names)
+
+    return out
+
+
+# ── Database operations ──────────────────────────────────────────────────────
+
+def _monitoring_status_for(status: str | None) -> str:
+    return "closed" if is_terminal(status) else "active"
+
+
+def upsert_summary(conn, records: list) -> int:
+    """INSERT … ON CONFLICT UPDATE for summary-level data.
+
+    Sets monitoring_status based on the application status and records
+    status_changed_at when the status actually changes.
+    """
+    if not records:
+        return 0
+
+    sql = """
+        INSERT INTO goldcoast_dev_applications
+            (application_number, description, application_type,
+             lodgement_date, status, suburb, location_address,
+             monitoring_status, last_scraped_at)
+        VALUES
+            (%(application_number)s, %(description)s, %(application_type)s,
+             %(lodgement_date)s, %(status)s, %(suburb)s, %(location_address)s,
+             %(monitoring_status)s, NOW())
+        ON CONFLICT (application_number) DO UPDATE SET
+            description      = COALESCE(EXCLUDED.description, goldcoast_dev_applications.description),
+            application_type = COALESCE(EXCLUDED.application_type, goldcoast_dev_applications.application_type),
+            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, goldcoast_dev_applications.lodgement_date),
+            status           = COALESCE(EXCLUDED.status, goldcoast_dev_applications.status),
+            suburb           = COALESCE(EXCLUDED.suburb, goldcoast_dev_applications.suburb),
+            location_address = COALESCE(EXCLUDED.location_address, goldcoast_dev_applications.location_address),
+            monitoring_status = EXCLUDED.monitoring_status,
+            status_changed_at = CASE
+                WHEN goldcoast_dev_applications.status IS DISTINCT FROM EXCLUDED.status
+                THEN NOW()
+                ELSE goldcoast_dev_applications.status_changed_at
+            END,
+            last_scraped_at  = NOW()
+    """
+
+    cur = conn.cursor()
+    count = 0
+    for rec in records:
+        app_num = rec.get("application_number")
+        if not app_num:
+            continue
+
+        status = rec.get("status")
+        params = {
+            "application_number": app_num,
+            "description": rec.get("description"),
+            "application_type": rec.get("application_type"),
+            "lodgement_date": parse_au_date(rec.get("lodgement_date", "")),
+            "status": status,
+            "suburb": rec.get("suburb"),
+            "location_address": rec.get("location_address"),
+            "monitoring_status": _monitoring_status_for(status),
+        }
+        cur.execute(sql, params)
+        count += 1
+
+        if count % BATCH_SIZE == 0:
+            conn.commit()
+            log.info(f"  Committed {count} rows …")
+
+    conn.commit()
+    return count
+
+
+def upsert_detail(conn, application_number: str, detail: dict) -> None:
+    """Update a single row with detail-page data."""
+    sets = ["detail_scraped_at = NOW()", "last_scraped_at = NOW()"]
+    params = {"app_num": application_number}
+
+    detail_columns = [
+        "location_address", "lot_on_plan", "suburb",
+        "pre_assessment_started", "pre_assessment_completed",
+        "confirmation_notice_started", "confirmation_notice_completed",
+        "decision_started", "decision_completed",
+        "documents_summary",
+    ]
+    for col in detail_columns:
+        if col in detail and detail[col] is not None:
+            sets.append(f"{col} = %({col})s")
+            params[col] = detail[col]
+
+    sql = f"""
+        UPDATE goldcoast_dev_applications
+        SET {', '.join(sets)}
+        WHERE application_number = %(app_num)s
+    """
+    cur = conn.cursor()
+    cur.execute(sql, params)
+    conn.commit()
+
+
+# ── High-level modes ─────────────────────────────────────────────────────────
+
+def run_scrape(page: Page, conn, args) -> None:
+    """Scrape summary data (date-range search → results table)."""
+    today = date.today()
+
+    if args.from_date and args.to_date:
+        from_d = date.fromisoformat(args.from_date)
+        to_d = date.fromisoformat(args.to_date)
+        ranges = month_ranges(from_d, to_d)
+    elif args.full:
+        ranges = month_ranges(FULL_START_DATE, today)
+    else:
+        from_d = today - timedelta(days=args.days)
+        ranges = [(from_d, today)]
+
+    total_upserted = 0
+    for i, (from_d, to_d) in enumerate(ranges, 1):
+        log.info(f"[{i}/{len(ranges)}] {from_d} → {to_d}")
+        try:
+            records = scrape_summary(page, from_d, to_d)
+            if records:
+                count = upsert_summary(conn, records)
+                total_upserted += count
+                log.info(f"  Upserted {count} records")
+            else:
+                log.info("  No records found")
+        except Exception as e:
+            log.error(f"  Error scraping {from_d} → {to_d}: {e}")
+            continue
+
+    log.info(f"Scrape complete. Total upserted: {total_upserted}")
+
+
+def run_enrich(page: Page, conn, limit, include_closed=False) -> None:
+    """Visit detail pages for applications that haven't been enriched yet.
+
+    By default skips closed (terminal-status) applications since their data
+    won't change.  Use --include-closed to force enrichment of those too.
+    """
+    cur = conn.cursor()
+    conditions = ["detail_scraped_at IS NULL"]
+    if not include_closed:
+        conditions.append("monitoring_status = 'active'")
+
+    sql = f"""
+        SELECT application_number
+        FROM goldcoast_dev_applications
+        WHERE {' AND '.join(conditions)}
+        ORDER BY lodgement_date DESC NULLS LAST
+    """
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    cur.execute(sql)
+    app_numbers = [row[0] for row in cur.fetchall()]
+    log.info(f"{len(app_numbers)} applications to enrich")
+
+    for i, app_num in enumerate(app_numbers, 1):
+        try:
+            log.info(f"[{i}/{len(app_numbers)}] {app_num}")
+
+            # Fresh session → search by application number
+            setup_session(page)
+
+            # Fill the application-number field (first/default tab)
+            num_field = page.locator(
+                "input[name*='FormattedNumber'], "
+                "input[name*='NumberTextBox'], "
+                "input[name*='ApplicationNumber']"
+            )
+            if num_field.count() == 0:
+                # Broadest fallback: first visible text input
+                num_field = page.locator("input[type='text']:visible")
+            num_field.first.fill(app_num)
+
+            page.locator("input[value='Search']").click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(DELAY)
+
+            # Click into the result
+            result_link = page.locator("table.ContentPanel a")
+            if result_link.count() == 0:
+                log.warning(f"  No result found — skipping")
+                upsert_detail(conn, app_num, {})
+                continue
+
+            result_link.first.click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(DELAY)
+
+            # Extract detail data via JS
+            raw = page.evaluate(JS_EXTRACT_DETAIL)
+            detail = extract_detail_data(raw)
+
+            upsert_detail(conn, app_num, detail)
+            log.info(f"  Updated with {len(detail)} fields")
+
+        except Exception as e:
+            log.error(f"  Error enriching {app_num}: {e}")
+            # Mark as attempted so we don't retry endlessly
+            try:
+                upsert_detail(conn, app_num, {})
+            except Exception:
+                pass
+            continue
+
+    log.info("Enrichment complete")
+
+
+def run_monitor(page: Page, conn, limit) -> None:
+    """Re-check active (non-terminal) applications for status/detail changes.
+
+    Searches each active application by number, reads the summary row for
+    a fresh status, then visits the detail page for updated milestones,
+    documents, etc.  Applications that have reached a terminal status are
+    automatically marked 'closed'.
+    """
+    cur = conn.cursor()
+    sql = """
+        SELECT application_number
+        FROM goldcoast_dev_applications
+        WHERE monitoring_status = 'active'
+        ORDER BY last_scraped_at ASC NULLS FIRST
+    """
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    cur.execute(sql)
+    app_numbers = [row[0] for row in cur.fetchall()]
+    log.info(f"{len(app_numbers)} active applications to monitor")
+
+    updated = 0
+    closed = 0
+    for i, app_num in enumerate(app_numbers, 1):
+        try:
+            log.info(f"[{i}/{len(app_numbers)}] {app_num}")
+
+            # Fresh session → search by application number
+            setup_session(page)
+
+            num_field = page.locator(
+                "input[name*='FormattedNumber'], "
+                "input[name*='NumberTextBox'], "
+                "input[name*='ApplicationNumber']"
+            )
+            if num_field.count() == 0:
+                num_field = page.locator("input[type='text']:visible")
+            num_field.first.fill(app_num)
+
+            page.locator("input[value='Search']").click()
+            page.wait_for_load_state("networkidle")
+            time.sleep(DELAY)
+
+            # Read summary row for fresh status
+            summary_records = parse_results_table(page)
+            fresh_status = None
+            for rec in summary_records:
+                normalised = rec if "application_number" in rec else normalise_columns(rec)
+                if normalised.get("application_number") == app_num:
+                    fresh_status = normalised.get("status")
+                    # Upsert the summary (updates status, status_changed_at, monitoring_status)
+                    upsert_summary(conn, [normalised])
+                    break
+
+            # Click into the detail page
+            result_link = page.locator("table.ContentPanel a")
+            if result_link.count() > 0:
+                result_link.first.click()
+                page.wait_for_load_state("networkidle")
+                time.sleep(DELAY)
+
+                raw = page.evaluate(JS_EXTRACT_DETAIL)
+                detail = extract_detail_data(raw)
+                upsert_detail(conn, app_num, detail)
+
+            updated += 1
+            if is_terminal(fresh_status):
+                closed += 1
+                log.info(f"  Status '{fresh_status}' → closed")
+            else:
+                log.info(f"  Status '{fresh_status}' → still active")
+
+        except Exception as e:
+            log.error(f"  Error monitoring {app_num}: {e}")
+            continue
+
+    log.info(f"Monitor complete. Updated: {updated}, newly closed: {closed}")
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Import Gold Coast development applications from ePathway"
+    )
+
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--full", action="store_true",
+                      help="Full import from July 2017 to now")
+    mode.add_argument("--enrich", action="store_true",
+                      help="Enrich existing records with detail-page data")
+    mode.add_argument("--monitor", action="store_true",
+                      help="Re-check active applications for status/detail updates")
+
+    parser.add_argument("--days", type=int, default=30,
+                        help="Delta: scrape last N days (default 30)")
+    parser.add_argument("--from-date", type=str,
+                        help="Start date YYYY-MM-DD (overrides --days)")
+    parser.add_argument("--to-date", type=str,
+                        help="End date YYYY-MM-DD")
+    parser.add_argument("--headed", action="store_true",
+                        help="Show browser window for debugging")
+    parser.add_argument("--delay", type=float, default=DEFAULT_DELAY,
+                        help="Seconds between page loads (default 1.5)")
+    parser.add_argument("--limit", type=int,
+                        help="Max applications to process (--enrich / --monitor)")
+    parser.add_argument("--include-closed", action="store_true",
+                        help="Include closed/terminal-status apps (--enrich only)")
+
+    args = parser.parse_args()
+
+    global DELAY
+    DELAY = args.delay
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s  %(message)s",
+    )
+
+    conn = get_connection()
+    log.info("Connected to database")
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not args.headed)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            )
+        )
+        page = context.new_page()
+        page.set_default_timeout(30000)
+
+        try:
+            if args.enrich:
+                run_enrich(page, conn, args.limit, include_closed=args.include_closed)
+            elif args.monitor:
+                run_monitor(page, conn, args.limit)
+            else:
+                run_scrape(page, conn, args)
+        finally:
+            browser.close()
+            conn.close()
+
+
+if __name__ == "__main__":
+    main()
