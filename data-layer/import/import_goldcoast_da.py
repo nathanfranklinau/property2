@@ -540,7 +540,7 @@ def extract_detail_data(raw: dict) -> dict:
         elif task_type == "decision":
             out["decision_started"] = parse_au_date(started)
             out["decision_completed"] = parse_au_date(completed)
-        elif "decision - approved" in task_type or "decision-approved" in task_type:
+        elif "decision - approved" in task_type or "decision-approved" in task_type or task_type == "decision approved":
             out["decision_approved_started"] = parse_au_date(started)
             out["decision_approved_completed"] = parse_au_date(completed)
         elif "issue decision" in task_type:
