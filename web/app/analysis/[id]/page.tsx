@@ -562,6 +562,7 @@ export default function AnalysisPage() {
   const [unitAddresses, setUnitAddresses] = useState<string[] | null>(null);
   const [unitAddressesLoading, setUnitAddressesLoading] = useState(false);
   const [cityPlan, setCityPlan] = useState<CityPlanData | null>(null);
+  const [daCount, setDaCount] = useState<number | null>(null);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -660,6 +661,11 @@ export default function AnalysisPage() {
           fetch(`/api/analysis/cityplan?parcel_id=${encodeURIComponent(parcelId)}`)
             .then((r) => r.ok ? r.json() : null)
             .then((d) => { if (d) setCityPlan(d); })
+            .catch(() => {});
+
+          fetch(`/api/analysis/da-count?parcel_id=${encodeURIComponent(parcelId)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((d) => { if (d) setDaCount(d.count); })
             .catch(() => {});
 
           setNearbyLoading(true);
@@ -1161,7 +1167,23 @@ export default function AnalysisPage() {
                     value={typeInfo.label}
                   />
                 )}
+                {daCount !== null && (
+                  <SidebarRow
+                    icon={
+                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                        <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+                        <rect x="9" y="3" width="6" height="4" rx="1" />
+                        <path d="M9 12h6M9 16h4" />
+                      </svg>
+                    }
+                    label="Development Applications"
+                    value={daCount === 0 ? "None" : String(daCount)}
+                    valueColor={daCount === 0 ? "text-zinc-500" : "text-amber-400"}
+                    tooltip="Development Applications (DAs) lodged with Gold Coast City Council for this property. DAs include requests for new buildings, renovations, subdivisions, and changes of use."
+                  />
+                )}
                 <div className="px-3 py-1.5">
+                  {status.cadastre_lot !== 'COMPLEX' && (
                   <a
                     href={`https://apps.information.qld.gov.au/data/cadastre/GenerateSmartMap?q=${encodeURIComponent(`${status.cadastre_lot}\\${status.cadastre_plan}`)}`}
                     target="_blank"
@@ -1175,6 +1197,7 @@ export default function AnalysisPage() {
                     </svg>
                     View Smart Map (QLD)
                   </a>
+                  )}
                 </div>
               </SidebarSection>
 
@@ -1268,6 +1291,7 @@ export default function AnalysisPage() {
                             label="Site Cover Remaining"
                             value={sqm(siteCoverHeadroom)}
                             valueColor={siteCoverHeadroom > 50 ? "text-emerald-400" : "text-amber-400"}
+                            tooltip={`Your zone allows a maximum of ${Math.round((maxCover ?? 0) * 100)}% of the lot to be covered by structures (${sqm(lotArea ? (maxCover ?? 0) * lotArea : null)} allowed).\n\nSource: Gold Coast City Plan, Section 6.2.1`}
                           />
                         )}
                         {cityPlan.corner_lot && (
@@ -1828,18 +1852,30 @@ function SidebarRow({
   value,
   highlight,
   valueColor,
+  tooltip,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   highlight?: boolean;
   valueColor?: string;
+  tooltip?: string;
 }) {
   return (
     <div className="flex items-center justify-between px-3 py-2.5 gap-3">
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="relative group flex items-center gap-2 min-w-0">
         <span className="text-zinc-600 flex-shrink-0">{icon}</span>
         <span className="text-xs text-zinc-400 truncate">{label}</span>
+        {tooltip && (
+          <>
+            <button className="w-3.5 h-3.5 rounded-full border border-zinc-700 text-zinc-600 hover:text-zinc-400 hover:border-zinc-500 transition-colors flex items-center justify-center text-[9px] leading-none flex-shrink-0">
+              i
+            </button>
+            <div className="absolute left-0 top-full mt-1 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-3 text-[11px] text-zinc-300 leading-relaxed whitespace-pre-line">
+              {tooltip}
+            </div>
+          </>
+        )}
       </div>
       <span
         className={`text-xs font-semibold tabular-nums flex-shrink-0 ${
