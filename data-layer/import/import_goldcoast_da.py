@@ -100,6 +100,173 @@ def is_terminal(status: str | None) -> bool:
         return False
     return status.strip().lower() in TERMINAL_STATUSES
 
+
+# ── Description parsing ──────────────────────────────────────────────────────
+
+# Dwelling type patterns → (dwelling_type, development_category)
+_DWELLING_PATTERNS = [
+    (r"DUAL OCCUPANCY",            "Dual Occupancy",            "Residential"),
+    (r"MULTIPLE DWELLING",         "Multiple Dwelling",         "Residential"),
+    (r"SECONDARY DWELLING",        "Secondary Dwelling",        "Residential"),
+    (r"SHORT.?TERM ACCOMM",        "Short-Term Accommodation",  "Residential"),
+    (r"TOWNHOUSE",                 "Townhouse",                 "Residential"),
+    (r"DWELLING HOUSE",            "Dwelling House",            "Residential"),
+    (r"FAMILY ACCOMMODATION",      "Family Accommodation",      "Residential"),
+    (r"CARETAKER",                 "Caretakers Accommodation",  "Residential"),
+    (r"ROOMING ACCOMM",            "Rooming Accommodation",     "Residential"),
+    (r"RETIREMENT|AGED CARE|RESIDENTIAL CARE", "Retirement Facility", "Residential"),
+    (r"HOME.?BASED BUSINESS|BED.*BREAKFAST",   "Home Based Business", "Residential"),
+    (r"CHILD.?CARE|KINDY",         "Childcare",                 "Commercial"),
+    (r"FOOD|RESTAURANT|CAFE|TAKEAWAY", "Food & Drink",          "Commercial"),
+    (r"TELECOMM",                  "Telecommunications",        "Infrastructure"),
+    (r"OFFICE",                    "Office",                    "Commercial"),
+    (r"SHOP|RETAIL",               "Shop/Retail",               "Commercial"),
+    (r"WAREHOUSE|INDUSTR|FACTORY", "Industrial",                "Industrial"),
+    (r"SERVICE STATION|CAR WASH",  "Automotive",                "Commercial"),
+    (r"MEDICAL|HEALTH|VET",        "Health/Medical",            "Commercial"),
+    (r"SPORT|RECREATION",          "Sport & Recreation",        "Commercial"),
+    (r"HOTEL|MOTEL|RESORT",        "Tourist Accommodation",     "Commercial"),
+    (r"SHOWROOM|DISPLAY",          "Showroom",                  "Commercial"),
+    (r"OUTDOOR SALES",             "Outdoor Sales",             "Commercial"),
+    (r"PLACE OF WORSHIP|CHURCH",   "Place of Worship",          "Community"),
+    (r"EDUCATION|SCHOOL",          "Education",                 "Community"),
+    (r"HOSPITAL",                  "Hospital",                  "Community"),
+]
+
+# OPW subtype patterns → (dwelling_type, development_category)
+_OPW_PATTERNS = [
+    (r"TREE WORKS PRIVATE",        "Private Tree Works",        "Infrastructure"),
+    (r"TREE WORKS DEV",            "Tree Works (Development)",  "Infrastructure"),
+    (r"LANDSCAP",                  "Landscaping",               "Infrastructure"),
+    (r"CIVIL ENGINEERING",         "Civil Engineering",         "Infrastructure"),
+    (r"GROUND LEVEL|CARPARK",      "Ground Level/Carparking",   "Infrastructure"),
+    (r"PONTOON|SEAWALL|ROCK WALL|REVETMENT", "Waterfront Structure", "Waterfront"),
+    (r"SEWER|WATER",               "Sewer & Water",             "Infrastructure"),
+    (r"ELECTRICAL|STREET LIGHT",   "Electrical/Lighting",       "Infrastructure"),
+    (r"VXO|VEHICLE ACCESS",        "Vehicle Access",            "Infrastructure"),
+    (r"BUILDING WORKS|ABW",        "Associated Building Works", "Infrastructure"),
+    (r"STORMWATER|DRAINAGE",       "Stormwater/Drainage",       "Infrastructure"),
+]
+
+# Unit count extraction patterns (ordered by priority)
+_UNIT_COUNT_RES = [
+    re.compile(r"(\d+)\s*(?:X\s*)?(?:MULTIPLE DWELLING|UNIT|TOWNHOUSE)", re.I),
+    re.compile(r"(?:MULTIPLE DWELLING|UNIT|TOWNHOUSE)S?\s*(?:X\s*)?(\d+)", re.I),
+    re.compile(r"\((\d+)\s*UNIT", re.I),
+]
+
+_LOT_SPLIT_RE = re.compile(r"(\d+)\s*INTO\s*(\d+)", re.I)
+
+_ROL_SUBTYPE_PATTERNS = [
+    (r"BOUNDARY REALIGNMENT",  "Boundary Realignment",  "Infrastructure"),
+    (r"ROAD CLOSURE",          "Road Closure",          "Infrastructure"),
+    (r"COMMUNITY TITLE",       "Community Title",       "Residential"),
+    (r"FREEHOLD",              "Freehold Subdivision",  "Residential"),
+    (r"STANDARD FORMAT",       "Standard Format",       "Residential"),
+]
+
+
+def parse_description(description: str | None, application_type: str | None) -> dict:
+    """Parse a DA description into structured category fields.
+
+    Returns dict with keys: development_category, dwelling_type, unit_count,
+    lot_split_from, lot_split_to, assessment_level.
+    """
+    result = {
+        "development_category": None,
+        "dwelling_type": None,
+        "unit_count": None,
+        "lot_split_from": None,
+        "lot_split_to": None,
+        "assessment_level": None,
+    }
+
+    if not description:
+        return result
+
+    desc_upper = description.upper()
+    app_type = (application_type or "").strip()
+
+    # -- Assessment level (applies to all types) --
+    if re.search(r"\bIMPACT\b", desc_upper):
+        result["assessment_level"] = "Impact"
+    elif re.search(r"\bCODE\b", desc_upper):
+        result["assessment_level"] = "Code"
+
+    # -- MCU: dwelling type + category --
+    if app_type == "Material Change of Use" or app_type == "Combined Application":
+        for pattern, dwelling, category in _DWELLING_PATTERNS:
+            if re.search(pattern, desc_upper):
+                result["dwelling_type"] = dwelling
+                result["development_category"] = category
+                break
+        if not result["development_category"]:
+            result["development_category"] = "Other"
+        # Unit count
+        for rx in _UNIT_COUNT_RES:
+            m = rx.search(description)
+            if m:
+                count = int(m.group(1))
+                if 1 < count < 10000:
+                    result["unit_count"] = count
+                break
+
+    # -- ROL: lot split + subtype --
+    elif app_type == "Reconfiguring a lot":
+        for pattern, dwelling, category in _ROL_SUBTYPE_PATTERNS:
+            if re.search(pattern, desc_upper):
+                result["dwelling_type"] = dwelling
+                result["development_category"] = category
+                break
+        if not result["development_category"]:
+            result["development_category"] = "Residential"
+        m = _LOT_SPLIT_RE.search(description)
+        if m:
+            result["lot_split_from"] = int(m.group(1))
+            result["lot_split_to"] = int(m.group(2))
+
+    # -- Operational Works / Vehicle Access --
+    elif app_type in ("Operational Works", "OPW Vehicle Access Works"):
+        for pattern, dwelling, category in _OPW_PATTERNS:
+            if re.search(pattern, desc_upper):
+                result["dwelling_type"] = dwelling
+                result["development_category"] = category
+                break
+        if not result["development_category"]:
+            result["development_category"] = "Infrastructure"
+
+    # -- Prescribed Tidal Works --
+    elif app_type == "Prescribed Tidal Works":
+        result["development_category"] = "Waterfront"
+        if re.search(r"PONTOON", desc_upper):
+            result["dwelling_type"] = "Pontoon"
+        elif re.search(r"SEAWALL|ROCK WALL|REVETMENT", desc_upper):
+            result["dwelling_type"] = "Seawall/Revetment"
+        else:
+            result["dwelling_type"] = "Tidal Works"
+
+    # -- Minor Change / Extension / Other --
+    elif app_type in ("Minor Change", "Extension of Approval", "Other Change"):
+        # Try to detect underlying type from description
+        for pattern, dwelling, category in _DWELLING_PATTERNS:
+            if re.search(pattern, desc_upper):
+                result["dwelling_type"] = dwelling
+                result["development_category"] = category
+                break
+        if not result["development_category"]:
+            if re.search(r"RECONFIGU|ROL", desc_upper):
+                result["development_category"] = "Residential"
+            elif re.search(r"OPERATIONAL|OPW", desc_upper):
+                result["development_category"] = "Infrastructure"
+            else:
+                result["development_category"] = "Other"
+
+    # -- Everything else --
+    else:
+        result["development_category"] = "Other"
+
+    return result
+
 # ── Column-name normalisation (ePathway varies per installation) ─────────────
 
 COLUMN_MAP = {
@@ -673,6 +840,8 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         "decision_type", "decision_date", "decision_authority",
         "documents_summary",
         "status", "monitoring_status",
+        "development_category", "dwelling_type", "unit_count",
+        "lot_split_from", "lot_split_to", "assessment_level",
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
@@ -806,7 +975,7 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
-            "SELECT application_number FROM goldcoast_dev_applications "
+            "SELECT application_number, application_type FROM goldcoast_dev_applications "
             "WHERE application_number = %s",
             (target_app,),
         )
@@ -814,14 +983,14 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
         if not row:
             log.error(f"Application '{target_app}' not found in database")
             return
-        rows = [row[0]]
+        rows = [(row[0], row[1])]
     else:
         conditions = ["detail_scraped_at IS NULL"]
         if not include_closed:
             conditions.append("monitoring_status = 'active'")
 
         sql = f"""
-            SELECT application_number
+            SELECT application_number, application_type
             FROM goldcoast_dev_applications
             WHERE {' AND '.join(conditions)}
             ORDER BY lodgement_date DESC NULLS LAST
@@ -830,7 +999,7 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
             sql += f" LIMIT {int(limit)}"
 
         cur.execute(sql)
-        rows = [r[0] for r in cur.fetchall()]
+        rows = [(r[0], r[1]) for r in cur.fetchall()]
 
     log.info(f"{len(rows)} applications to enrich")
 
@@ -840,7 +1009,7 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
 
     consecutive_errors = 0
 
-    for i, app_num in enumerate(rows, 1):
+    for i, (app_num, app_type) in enumerate(rows, 1):
         try:
             log.info(f"[{i}/{len(rows)}] {app_num}")
 
@@ -894,6 +1063,10 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
 
             detail = extract_detail_data(raw)
 
+            # Parse description into structured category fields
+            parsed = parse_description(detail.get("description"), app_type)
+            detail.update(parsed)
+
             upsert_detail(conn, app_num, detail)
             log.info(f"  Updated with {len(detail)} fields: {list(detail.keys())}")
 
@@ -926,7 +1099,7 @@ def run_monitor(page: Page, conn, limit) -> None:
     """
     cur = conn.cursor()
     sql = """
-        SELECT application_number
+        SELECT application_number, application_type
         FROM goldcoast_dev_applications
         WHERE monitoring_status = 'active'
         ORDER BY last_scraped_at ASC NULLS FIRST
@@ -935,7 +1108,7 @@ def run_monitor(page: Page, conn, limit) -> None:
         sql += f" LIMIT {int(limit)}"
 
     cur.execute(sql)
-    rows = [r[0] for r in cur.fetchall()]
+    rows = [(r[0], r[1]) for r in cur.fetchall()]
     log.info(f"{len(rows)} active applications to monitor")
 
     setup_session(page)
@@ -944,7 +1117,7 @@ def run_monitor(page: Page, conn, limit) -> None:
     updated = 0
     closed = 0
 
-    for i, app_num in enumerate(rows, 1):
+    for i, (app_num, app_type) in enumerate(rows, 1):
         try:
             log.info(f"[{i}/{len(rows)}] {app_num}")
 
@@ -985,6 +1158,11 @@ def run_monitor(page: Page, conn, limit) -> None:
 
             raw = page.evaluate(JS_EXTRACT_DETAIL)
             detail = extract_detail_data(raw)
+
+            # Parse description into structured category fields
+            parsed = parse_description(detail.get("description"), app_type)
+            detail.update(parsed)
+
             upsert_detail(conn, app_num, detail)
             updated += 1
 
