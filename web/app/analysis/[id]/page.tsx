@@ -17,6 +17,7 @@ import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type Propert
 import { PlanTypeIcon } from "@/components/PlanTypeIcon";
 import { getZoneDefinition } from "@/lib/zone-definitions";
 import { getZoneRules } from "@/lib/zone-rules";
+import { DAActivityPanel, buildDAMapMarkers } from "@/components/DAActivityPanel";
 
 type AnalysisStatus = {
   parcel_id: string;
@@ -562,7 +563,14 @@ export default function AnalysisPage() {
   const [unitAddresses, setUnitAddresses] = useState<string[] | null>(null);
   const [unitAddressesLoading, setUnitAddressesLoading] = useState(false);
   const [cityPlan, setCityPlan] = useState<CityPlanData | null>(null);
-  const [daCount, setDaCount] = useState<number | null>(null);
+  const [das, setDas] = useState<import("@/app/api/analysis/das/route").DevelopmentApplication[] | null>(null);
+  const [dasLoading, setDasLoading] = useState(false);
+  const [nearbyDAs, setNearbyDAs] = useState<import("@/app/api/analysis/nearby-das/route").NearbyDA[] | null>(null);
+  const [nearbyDAsLoading, setNearbyDAsLoading] = useState(false);
+  const [nearbyDARadius, setNearbyDARadius] = useState(1000);
+  const [nearbyDATotal, setNearbyDATotal] = useState(0);
+  const [nearbyDASummary, setNearbyDASummary] = useState<{ by_type: Record<string, number>; by_category: Record<string, number>; by_status: Record<string, number> } | null>(null);
+  const [showDAsOnMap, setShowDAsOnMap] = useState(false);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -663,10 +671,12 @@ export default function AnalysisPage() {
             .then((d) => { if (d) setCityPlan(d); })
             .catch(() => {});
 
-          fetch(`/api/analysis/da-count?parcel_id=${encodeURIComponent(parcelId)}`)
+          setDasLoading(true);
+          fetch(`/api/analysis/das?parcel_id=${encodeURIComponent(parcelId)}`)
             .then((r) => r.ok ? r.json() : null)
-            .then((d) => { if (d) setDaCount(d.count); })
-            .catch(() => {});
+            .then((d) => { setDas(d ? d.applications : []); })
+            .catch(() => { setDas([]); })
+            .finally(() => setDasLoading(false));
 
           setNearbyLoading(true);
           fetch(`/api/analysis/nearby-subdivisions?parcel_id=${encodeURIComponent(parcelId)}`)
@@ -710,6 +720,25 @@ export default function AnalysisPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [parcelId]);
+
+  // ─── Fetch nearby DAs whenever parcelId or radius changes ───────────────
+  useEffect(() => {
+    if (!parcelId || das === null) return; // only fetch after property DAs are loaded (confirms Gold Coast)
+    setNearbyDAsLoading(true);
+    fetch(`/api/analysis/nearby-das?parcel_id=${encodeURIComponent(parcelId)}&radius_m=${nearbyDARadius}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d) {
+          setNearbyDAs(d.applications);
+          setNearbyDATotal(d.total);
+          setNearbyDASummary(d.summary);
+        } else {
+          setNearbyDAs(null);
+        }
+      })
+      .catch(() => { setNearbyDAs(null); })
+      .finally(() => setNearbyDAsLoading(false));
+  }, [parcelId, das, nearbyDARadius]);
 
   // ─── Error state ────────────────────────────────────────────────────────
   if (fetchError) {
@@ -885,6 +914,7 @@ export default function AnalysisPage() {
                   complexBoundary={complexBoundaryRings}
                   nearbySubdivisions={nearbyBoundaries}
                   focusedNearbyPlan={focusedNearbyPlan}
+                  daMarkers={showDAsOnMap && nearbyDAs ? buildDAMapMarkers(nearbyDAs) : undefined}
                 />
               )}
           </div>
@@ -1167,21 +1197,6 @@ export default function AnalysisPage() {
                     value={typeInfo.label}
                   />
                 )}
-                {daCount !== null && (
-                  <SidebarRow
-                    icon={
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                        <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-                        <rect x="9" y="3" width="6" height="4" rx="1" />
-                        <path d="M9 12h6M9 16h4" />
-                      </svg>
-                    }
-                    label="Development Applications"
-                    value={daCount === 0 ? "None" : String(daCount)}
-                    valueColor={daCount === 0 ? "text-zinc-500" : "text-amber-400"}
-                    tooltip="Development Applications (DAs) lodged with Gold Coast City Council for this property. DAs include requests for new buildings, renovations, subdivisions, and changes of use."
-                  />
-                )}
                 <div className="px-3 py-1.5">
                   {status.cadastre_lot !== 'COMPLEX' && (
                   <a
@@ -1201,8 +1216,19 @@ export default function AnalysisPage() {
                 </div>
               </SidebarSection>
 
-
-
+              {/* Development Activity (Gold Coast only) */}
+              <DAActivityPanel
+                parcelDAs={das}
+                nearbyDAs={nearbyDAs}
+                nearbyTotal={nearbyDATotal}
+                nearbySummary={nearbyDASummary}
+                nearbyRadius={nearbyDARadius}
+                onNearbyRadiusChange={setNearbyDARadius}
+                showOnMap={showDAsOnMap}
+                onShowOnMapChange={setShowDAsOnMap}
+                loading={dasLoading}
+                nearbyLoading={nearbyDAsLoading}
+              />
 
               {/* City Plan (Gold Coast only) */}
               {cityPlan && (

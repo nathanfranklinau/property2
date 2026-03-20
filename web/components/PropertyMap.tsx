@@ -71,6 +71,19 @@ type PropertyMapProps = {
     distance_m: number;
     centroid: { lat: number; lng: number };
   }) => void;
+  /** Development application markers to display on the map. */
+  daMarkers?: {
+    lat: number;
+    lng: number;
+    applicationNumber: string;
+    applicationTypeLong: string;
+    shortLabel: string;
+    status: string | null;
+    description: string | null;
+    lodgementDate: string | null;
+    mapColor: string;
+    epathwayId: number | null;
+  }[];
 };
 
 type LatLng = google.maps.LatLngLiteral;
@@ -770,6 +783,7 @@ function MapInterior({
   nearbySubdivisions,
   focusedNearbyPlan,
   onNearbyPlanClick,
+  daMarkers,
 }: {
   boundaryCoords: [number, number][];
   footprints: BuildingFootprint[];
@@ -796,6 +810,18 @@ function MapInterior({
     distance_m: number;
     centroid: { lat: number; lng: number };
   }) => void;
+  daMarkers?: {
+    lat: number;
+    lng: number;
+    applicationNumber: string;
+    applicationTypeLong: string;
+    shortLabel: string;
+    status: string | null;
+    description: string | null;
+    lodgementDate: string | null;
+    mapColor: string;
+    epathwayId: number | null;
+  }[];
 }) {
   const map = useMap();
 
@@ -821,6 +847,17 @@ function MapInterior({
     position: LatLng;
   } | null>(null);
   const nearbyInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
+  const [daInfoWindowData, setDAInfoWindowData] = useState<{
+    position: google.maps.LatLngLiteral;
+    applicationNumber: string;
+    applicationTypeLong: string;
+    shortLabel: string;
+    status: string | null;
+    description: string | null;
+    lodgementDate: string | null;
+    epathwayId: number | null;
+  } | null>(null);
+  const daInfoWindowRef = useRef<google.maps.InfoWindow | null>(null);
 
   const { pushChange, undo, redo, canUndo, canRedo } = useHistory(
     footprints,
@@ -840,6 +877,7 @@ function MapInterior({
   const encumbrancePolysRef = useRef<google.maps.Polygon[]>([]);
   const encumbranceLabelMarkersRef = useRef<google.maps.Marker[]>([]);
   const subdivisionLabelMarkersRef = useRef<google.maps.Marker[]>([]);
+  const daMarkersRef = useRef<google.maps.Marker[]>([]);
 
   const boundaryPath = useMemo(
     () => boundaryCoords.map(([lat, lng]) => ({ lat, lng })),
@@ -1204,6 +1242,96 @@ function MapInterior({
       iw.close();
     };
   }, [map, nearbyInfoWindow]);
+
+  // ── Render DA markers ────────────────────────────────────────────────────
+  useEffect(() => {
+    for (const m of daMarkersRef.current) {
+      google.maps.event.clearInstanceListeners(m);
+      m.setMap(null);
+    }
+    daMarkersRef.current = [];
+    if (!map || !daMarkers || daMarkers.length === 0) return;
+
+    for (const da of daMarkers) {
+      const marker = new google.maps.Marker({
+        position: { lat: da.lat, lng: da.lng },
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 7,
+          fillColor: da.mapColor,
+          fillOpacity: 0.85,
+          strokeColor: "#ffffff",
+          strokeWeight: 1.5,
+        },
+        title: `${da.shortLabel} — ${da.status ?? ""}`,
+        zIndex: 10,
+        map,
+      });
+
+      marker.addListener("click", () => {
+        setDAInfoWindowData({
+          position: { lat: da.lat, lng: da.lng },
+          applicationNumber: da.applicationNumber,
+          applicationTypeLong: da.applicationTypeLong,
+          shortLabel: da.shortLabel,
+          status: da.status,
+          description: da.description,
+          lodgementDate: da.lodgementDate,
+          epathwayId: da.epathwayId,
+        });
+      });
+
+      daMarkersRef.current.push(marker);
+    }
+
+    return () => {
+      for (const m of daMarkersRef.current) {
+        google.maps.event.clearInstanceListeners(m);
+        m.setMap(null);
+      }
+      daMarkersRef.current = [];
+    };
+  }, [map, daMarkers]);
+
+  // ── DA InfoWindow ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!map) return;
+
+    if (daInfoWindowRef.current) {
+      daInfoWindowRef.current.close();
+      daInfoWindowRef.current = null;
+    }
+    if (!daInfoWindowData) return;
+
+    const { applicationNumber, applicationTypeLong, shortLabel, status, description, lodgementDate, epathwayId, position } = daInfoWindowData;
+    const dateStr = lodgementDate ? new Date(lodgementDate).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "";
+    const descTrunc = description && description.length > 120 ? description.slice(0, 120) + "…" : (description ?? "");
+    const link = epathwayId
+      ? `https://epathway.goldcoast.qld.gov.au/epathway/Index.aspx?app=73&appId=${epathwayId}`
+      : null;
+
+    const content = `
+      <div style="font-family:system-ui,sans-serif;font-size:12px;max-width:260px;line-height:1.5">
+        <div style="font-weight:700;font-size:13px;margin-bottom:3px;color:#111827">${applicationTypeLong}</div>
+        ${status ? `<div style="color:#6b7280;margin-bottom:4px;font-size:11px">${status}</div>` : ""}
+        ${descTrunc ? `<div style="color:#374151;margin-bottom:6px">${descTrunc}</div>` : ""}
+        <div style="display:flex;gap:12px;color:#9ca3af;font-size:11px;margin-bottom:${link ? "8px" : "0"}">
+          <span>${applicationNumber}</span>
+          ${dateStr ? `<span>Lodged ${dateStr}</span>` : ""}
+        </div>
+        ${link ? `<a href="${link}" target="_blank" rel="noopener noreferrer" style="color:#10b981;font-size:11px;text-decoration:none">View on ePathway ↗</a>` : ""}
+      </div>`;
+
+    const iw = new google.maps.InfoWindow({ content, position });
+    iw.open(map);
+    daInfoWindowRef.current = iw;
+
+    const closeListener = iw.addListener("closeclick", () => setDAInfoWindowData(null));
+    return () => {
+      google.maps.event.removeListener(closeListener);
+      iw.close();
+    };
+  }, [map, daInfoWindowData]);
 
   // Helper: check if a point falls inside any nearby subdivision polygon
   const isInsideNearbySubdivision = useCallback(
@@ -1746,6 +1874,7 @@ export default function PropertyMap({
   nearbySubdivisions,
   focusedNearbyPlan,
   onNearbyPlanClick,
+  daMarkers,
 }: PropertyMapProps) {
   return (
     <APIProvider apiKey={apiKey} libraries={["places"]}>
@@ -1770,6 +1899,7 @@ export default function PropertyMap({
             nearbySubdivisions={nearbySubdivisions}
             focusedNearbyPlan={focusedNearbyPlan}
             onNearbyPlanClick={onNearbyPlanClick}
+            daMarkers={daMarkers}
           />
         </Map>
       </div>
