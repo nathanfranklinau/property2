@@ -470,14 +470,6 @@ export function DAActivityPanel({
   const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
   const [filterTimeRange, setFilterTimeRange] = useState<"6m" | "1y" | "2y" | "all">("all");
 
-  const isGoldCoast = parcelDAs !== null;
-  if (!isGoldCoast) return null;
-
-  // Compute unique types present in nearby DAs for filter chips
-  const availableTypes = nearbyDAs
-    ? Array.from(new Set(nearbyDAs.map((da) => daTypeMeta(da.application_type).shortLabel)))
-    : [];
-
   // Time range cutoff
   function timeRangeCutoff(range: string): Date | null {
     const now = new Date();
@@ -498,12 +490,20 @@ export function DAActivityPanel({
     return true;
   });
 
-  const filteredCount = filteredNearbyDAs.length;
-  const hasActiveFilters = filterTypes.length > 0 || filterStatuses.length > 0 || filterTimeRange !== "all";
-
   useEffect(() => {
     onFilteredDAsChange?.(filteredNearbyDAs);
   }, [filteredNearbyDAs, onFilteredDAsChange]);
+
+  const isGoldCoast = parcelDAs !== null;
+  if (!isGoldCoast) return null;
+
+  // Compute unique types present in nearby DAs for filter chips
+  const availableTypes = nearbyDAs
+    ? Array.from(new Set(nearbyDAs.map((da) => daTypeMeta(da.application_type).shortLabel)))
+    : [];
+
+  const filteredCount = filteredNearbyDAs.length;
+  const hasActiveFilters = filterTypes.length > 0 || filterStatuses.length > 0 || filterTimeRange !== "all";
 
   function toggleType(label: string) {
     setFilterTypes((prev) => prev.includes(label) ? prev.filter((t) => t !== label) : [...prev, label]);
