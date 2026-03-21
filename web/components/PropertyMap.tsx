@@ -1600,11 +1600,18 @@ function MapInterior({
       }
     });
 
+    // Encumbrance edges
+    encumbrances.forEach((enc) => {
+      enc.coords.forEach((ring) => {
+        if (ring.length >= 3) addEdgeLabels(ring.map(([lat, lng]) => ({ lat, lng })), 14);
+      });
+    });
+
     return () => {
       for (const m of measureMarkersRef.current) m.setMap(null);
       measureMarkersRef.current = [];
     };
-  }, [map, footprints, boundaryPath, boundaryCoords, showMeasurements]);
+  }, [map, footprints, boundaryPath, boundaryCoords, showMeasurements, encumbrances]);
 
   // ── Rotation drag: live rotate on mousemove, commit on mouseup ──────────
   useEffect(() => {

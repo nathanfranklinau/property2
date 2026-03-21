@@ -1058,51 +1058,77 @@ export default function AnalysisPage() {
                 </div>
               )}
 
-              {/* Big numbers — lot size, free space, covered */}
+              {/* Lot size + breakdown */}
               {status.lot_area_sqm != null && (
-                <div className="flex items-end gap-4">
+                <div className="space-y-3">
+                  {/* Primary metric */}
                   <div>
-                    <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Lot Size</p>
+                    <p className="text-[11px] text-zinc-500 uppercase tracking-wider font-medium mb-0.5">Lot Size</p>
                     <p className="text-4xl font-bold tracking-tight tabular-nums leading-none">
                       {Math.round(status.lot_area_sqm).toLocaleString()}
                       <span className="text-lg font-medium text-zinc-300 ml-0.5">m²</span>
                     </p>
                   </div>
-                  {freeSpace != null && !isNaN(totalStructuresArea) && (
-                    <>
-                      <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
-                      <div>
-                        <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Free</p>
-                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-200">
-                          {Math.round(freeSpace).toLocaleString()}
-                          <span className="text-sm font-medium text-zinc-400 ml-0.5">m²</span>
-                        </p>
-                      </div>
-                      <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
-                      <div>
-                        <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
-                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-200">
-                          {Math.round(Math.min(totalStructuresArea, status.lot_area_sqm)).toLocaleString()}
-                          <span className="text-sm font-medium text-zinc-400 ml-0.5">m²</span>
-                          <span className="text-xs font-medium text-zinc-500 ml-1.5">
-                            {Math.round((Math.min(totalStructuresArea, status.lot_area_sqm) / status.lot_area_sqm) * 100)}%
-                          </span>
-                        </p>
-                      </div>
-                      {encumbranceArea > 0 && (
-                        <>
-                          <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
-                          <div>
-                            <p className="text-[11px] text-amber-400/80 mb-0.5 uppercase tracking-wider font-medium">Encumbered</p>
-                            <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-amber-300">
-                              {Math.round(encumbranceArea).toLocaleString()}
-                              <span className="text-sm font-medium text-amber-400/70 ml-0.5">m²</span>
-                            </p>
+
+                  {freeSpace != null && !isNaN(totalStructuresArea) && (() => {
+                    const lot = status.lot_area_sqm!;
+                    const covered = Math.min(totalStructuresArea, lot);
+                    const encumbered = Math.min(encumbranceArea, lot - covered);
+                    const free = Math.max(0, freeSpace);
+                    const covPct = (covered / lot) * 100;
+                    const encPct = (encumbered / lot) * 100;
+                    const freePct = (free / lot) * 100;
+                    return (
+                      <>
+                        {/* Stacked breakdown bar */}
+                        <div className="flex h-2 rounded-full overflow-hidden gap-px bg-zinc-800">
+                          {covered > 0 && (
+                            <div className="bg-yellow-400/70 rounded-l-full" style={{ width: `${covPct}%` }} />
+                          )}
+                          {encumbered > 0 && (
+                            <div className="bg-amber-500/80" style={{ width: `${encPct}%` }} />
+                          )}
+                          {free > 0 && (
+                            <div className="bg-emerald-500/40 rounded-r-full flex-1" style={{ width: `${freePct}%` }} />
+                          )}
+                        </div>
+
+                        {/* Sub-metrics */}
+                        <div className="flex items-start gap-3 flex-wrap">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-2 h-2 rounded-sm bg-emerald-500/60 flex-shrink-0" />
+                            <div>
+                              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium leading-none mb-0.5">Free</p>
+                              <p className="text-base font-semibold tabular-nums leading-none text-zinc-200">
+                                {Math.round(free).toLocaleString()}<span className="text-xs text-zinc-500 ml-0.5">m²</span>
+                              </p>
+                            </div>
                           </div>
-                        </>
-                      )}
-                    </>
-                  )}
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="w-2 h-2 rounded-sm bg-yellow-400/70 flex-shrink-0" />
+                            <div>
+                              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium leading-none mb-0.5">Covered</p>
+                              <p className="text-base font-semibold tabular-nums leading-none text-zinc-200">
+                                {Math.round(covered).toLocaleString()}<span className="text-xs text-zinc-500 ml-0.5">m²</span>
+                                <span className="text-[10px] text-zinc-600 ml-1">{Math.round((covered / lot) * 100)}%</span>
+                              </p>
+                            </div>
+                          </div>
+                          {encumbered > 0 && (
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="w-2 h-2 rounded-sm bg-amber-500/80 flex-shrink-0" />
+                              <div>
+                                <p className="text-[10px] text-amber-500/80 uppercase tracking-wider font-medium leading-none mb-0.5">Easement</p>
+                                <p className="text-base font-semibold tabular-nums leading-none text-amber-300">
+                                  {Math.round(encumbered).toLocaleString()}<span className="text-xs text-amber-500/70 ml-0.5">m²</span>
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
