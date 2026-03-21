@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type { DevelopmentApplication } from "@/app/api/analysis/das/route";
 import type { NearbyDA } from "@/app/api/analysis/nearby-das/route";
 
@@ -480,7 +480,7 @@ export function DAActivityPanel({
   }
 
   // Apply filters to nearby DAs
-  const filteredNearbyDAs = (nearbyDAs ?? []).filter((da) => {
+  const filteredNearbyDAs = useMemo(() => (nearbyDAs ?? []).filter((da) => {
     if (filterTypes.length > 0 && !filterTypes.includes(daTypeMeta(da.application_type).shortLabel)) return false;
     if (filterStatuses.length > 0 && !filterStatuses.includes(statusBucket(da.status))) return false;
     if (filterTimeRange !== "all") {
@@ -488,7 +488,7 @@ export function DAActivityPanel({
       if (cutoff && da.lodgement_date && new Date(da.lodgement_date) < cutoff) return false;
     }
     return true;
-  });
+  }), [nearbyDAs, filterTypes, filterStatuses, filterTimeRange]);
 
   useEffect(() => {
     onFilteredDAsChange?.(filteredNearbyDAs);
