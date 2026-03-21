@@ -15,6 +15,40 @@ type GeomEntry = {
   distance?: number;
 };
 
+// ─── Encumbrance types ───────────────────────────────────────────────────────
+
+type EncumbranceRow = {
+  id: number;
+  lotplan: string | null;
+  lot: string | null;
+  plan: string | null;
+  parcel_typ: string;
+  tenure: string | null;
+  feat_name: string | null;
+  alias_name: string | null;
+  overlap_area_sqm: number;
+  intersection_geojson: GeomEntry["geometry"] | null;
+  full_geometry_json: GeomEntry["geometry"] | null;
+};
+
+const ENC_COLOURS: Record<string, { fill: string; stroke: string }> = {
+  "Easement":          { fill: "#F59E0B", stroke: "#D97706" },
+  "Road":              { fill: "#EF4444", stroke: "#DC2626" },
+  "Road Type Parcel":  { fill: "#EF4444", stroke: "#DC2626" },
+  "Watercourse":       { fill: "#3B82F6", stroke: "#2563EB" },
+  "Transport Route":   { fill: "#EC4899", stroke: "#DB2777" },
+  "Covenant":          { fill: "#8B5CF6", stroke: "#7C3AED" },
+  "Profit à Prendre":  { fill: "#10B981", stroke: "#059669" },
+};
+const DEFAULT_ENC = { fill: "#94A3B8", stroke: "#64748B" };
+
+function encLabel(row: EncumbranceRow): string {
+  if (row.tenure === "Covenant") return "Covenant";
+  if (row.tenure === "Profit à Prendre") return "Profit à Prendre";
+  if (row.parcel_typ === "Road Type Parcel") return "Road";
+  return row.parcel_typ;
+}
+
 // ─── Colors for different layers ─────────────────────────────────────────────
 
 const COLORS = {
@@ -387,6 +421,41 @@ export default function DebugLookupPage() {
       }
     }
 
+    // 7. Encumbrances — filled polygons using their type colours
+    const encumbrances = d.encumbrances as EncumbranceRow[] | undefined;
+    if (encumbrances) {
+      encumbrances.forEach((enc) => {
+        const label = encLabel(enc);
+        const { fill, stroke } = ENC_COLOURS[label] ?? DEFAULT_ENC;
+        const geom = enc.intersection_geojson ?? enc.full_geometry_json;
+        if (!geom) return;
+        const rings =
+          geom.type === "MultiPolygon"
+            ? (geom.coordinates as number[][][][]).flatMap((p) => p)
+            : (geom.coordinates as number[][][]);
+        rings.forEach((ring) => {
+          const paths = ring.map(([lng, lat]) => ({ lat, lng }));
+          const poly = new google.maps.Polygon({
+            paths,
+            map,
+            strokeColor: stroke,
+            strokeWeight: 2,
+            strokeOpacity: 0.9,
+            fillColor: fill,
+            fillOpacity: 0.45,
+            zIndex: 500,
+          });
+          const content = `<b>${label}</b>${enc.lotplan ? `<br/>${enc.lotplan}` : ""}${enc.feat_name ? `<br/>${enc.feat_name}` : ""}<br/>${enc.overlap_area_sqm} m²`;
+          const infoWindow = new google.maps.InfoWindow({ content });
+          poly.addListener("click", (e: google.maps.MapMouseEvent) => {
+            infoWindow.setPosition(e.latLng!);
+            infoWindow.open(map);
+          });
+          overlaysRef.current.push(poly);
+        });
+      });
+    }
+
     // Fit map to bounds
     if (!bounds.isEmpty()) {
       map.fitBounds(bounds, 60);
@@ -654,20 +723,21 @@ export default function DebugLookupPage() {
           <div>
             {/* Summary */}
             <Section title="Parsed Address" objKey="parsed" data={data.parsed} />
-            <Section title="GNAF Matches" objKey="gnaf" data={data.gnaf} />
+            <Section title="GNAF Matches" objKey="gnaf" data={data.gnaf} query={(data as Record<string, unknown>)._query_gnaf as string | undefined} />
             <Section title="GNAF Point" objKey="gnafPoint" data={data.gnafPoint} />
-            <Section title="GNAF Geocodes (all types)" objKey="gnafGeocodes" data={data.gnafGeocodes} />
-            <Section title="ST_Contains Parcels" objKey="cadastreSpatialContains" data={data.cadastreSpatialContains} />
-            <Section title="ST_DWithin Parcels" objKey="cadastreDWithin" data={data.cadastreDWithin} />
+            <Section title="GNAF Geocodes (all types)" objKey="gnafGeocodes" data={data.gnafGeocodes} query={(data as Record<string, unknown>)._query_gnafGeocodes as string | undefined} />
+            <Section title="ST_Contains Parcels" objKey="cadastreSpatialContains" data={data.cadastreSpatialContains} query={(data as Record<string, unknown>)._query_cadastreSpatialContains as string | undefined} />
+            <Section title="ST_DWithin Parcels" objKey="cadastreDWithin" data={data.cadastreDWithin} query={(data as Record<string, unknown>)._query_cadastreDWithin as string | undefined} />
             <Section title="Refinement Input" objKey="refinementInput" data={data.refinementInput} />
-            <Section title="Address Refinement" objKey="addressRefinement" data={data.addressRefinement} />
-            <Section title="Cadastre Address (direct lookup)" objKey="cadastreAddressDirect" data={data.cadastreAddressDirect} />
-            <Section title="All Parcels for Lot/Plan" objKey="allPiecesForMatchedLot" data={data.allPiecesForMatchedLot} collapsed />
-            <Section title="All Addresses on Plan" objKey="allAddressesOnPlan" data={data.allAddressesOnPlan} collapsed />
-            <Section title="LGA" objKey="lga" data={data.lga} />
-            <Section title="Zoning" objKey="zoning" data={data.zoning} />
-            <Section title="Gold Coast Overlays" objKey="goldCoast" data={data.goldCoast} collapsed />
-            <Section title="Dev Applications" objKey="devApplications" data={data.devApplications} collapsed />
+            <Section title="Address Refinement" objKey="addressRefinement" data={data.addressRefinement} query={(data as Record<string, unknown>)._query_addressRefinement as string | undefined} />
+            <Section title="Cadastre Address (direct lookup)" objKey="cadastreAddressDirect" data={data.cadastreAddressDirect} query={(data as Record<string, unknown>)._query_cadastreAddressDirect as string | undefined} />
+            <Section title="All Parcels for Lot/Plan" objKey="allPiecesForMatchedLot" data={data.allPiecesForMatchedLot} collapsed query={(data as Record<string, unknown>)._query_allPiecesForMatchedLot as string | undefined} />
+            <Section title="All Addresses on Plan" objKey="allAddressesOnPlan" data={data.allAddressesOnPlan} collapsed query={(data as Record<string, unknown>)._query_allAddressesOnPlan as string | undefined} />
+            <Section title="LGA" objKey="lga" data={data.lga} query={(data as Record<string, unknown>)._query_lga as string | undefined} />
+            <Section title="Zoning" objKey="zoning" data={data.zoning} query={(data as Record<string, unknown>)._query_zoning as string | undefined} />
+            <Section title="Gold Coast Overlays" objKey="goldCoast" data={data.goldCoast} collapsed query={(data as Record<string, unknown>)._query_goldCoast as string | undefined} />
+            <Section title="Dev Applications" objKey="devApplications" data={data.devApplications} collapsed query={(data as Record<string, unknown>)._query_devApplications as string | undefined} />
+            <EncumbrancesSection encumbrances={data.encumbrances as EncumbranceRow[] | undefined} tableRef={data._tableRef_encumbrances as string | undefined} query={(data as Record<string, unknown>)._query_encumbrances as string | undefined} />
             <Section title="Raw Validation Response" objKey="addressValidation" data={data.addressValidation} collapsed />
           </div>
         )}
@@ -679,9 +749,100 @@ export default function DebugLookupPage() {
   );
 }
 
+// ─── Encumbrances table ───────────────────────────────────────────────────────
+
+function EncumbrancesSection({ encumbrances, tableRef, query }: { encumbrances: EncumbranceRow[] | undefined; tableRef: string | undefined; query?: string }) {
+  const [open, setOpen] = useState(true);
+  if (!encumbrances) return null;
+
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div onClick={() => setOpen(!open)} style={{ cursor: "pointer", fontWeight: "bold", color: "#8bf", userSelect: "none" }}>
+        {open ? "▾" : "▸"} Encumbrances
+        <span style={{ color: "#888" }}> ({encumbrances.length})</span>
+        <span style={{ color: "#555", fontWeight: "normal", fontSize: 11, marginLeft: 6 }}>.encumbrances</span>
+      </div>
+      {tableRef && (
+        <div style={{ fontSize: 10, color: "#666", marginBottom: 4, paddingLeft: 2 }}>
+          Table: <span style={{ color: "#888" }}>{tableRef}</span>
+        </div>
+      )}
+      {query && <SqlBlock query={query} />}
+      {open && (
+        encumbrances.length === 0 ? (
+          <div style={{ color: "#666", fontSize: 11, padding: "4px 0" }}>None found</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, background: "#0f0f23" }}>
+              <thead>
+                <tr style={{ color: "#888", borderBottom: "1px solid #333" }}>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>Type</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>Lot/Plan</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>parcel_typ</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>tenure</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>feat_name</th>
+                  <th style={{ padding: "4px 6px", textAlign: "right" }}>Overlap m²</th>
+                </tr>
+              </thead>
+              <tbody>
+                {encumbrances.map((enc, i) => {
+                  const label = encLabel(enc);
+                  const { fill, stroke } = ENC_COLOURS[label] ?? DEFAULT_ENC;
+                  return (
+                    <tr key={i} style={{ borderBottom: "1px solid #1a1a2e" }}>
+                      <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>
+                        <span style={{
+                          display: "inline-block", width: 8, height: 8, borderRadius: "50%",
+                          background: fill, border: `1.5px solid ${stroke}`, marginRight: 5, verticalAlign: "middle",
+                        }} />
+                        {label}
+                      </td>
+                      <td style={{ padding: "4px 6px", color: "#aaa" }}>{enc.lotplan ?? "—"}</td>
+                      <td style={{ padding: "4px 6px", color: "#aaa" }}>{enc.parcel_typ}</td>
+                      <td style={{ padding: "4px 6px", color: "#aaa" }}>{enc.tenure ?? "—"}</td>
+                      <td style={{ padding: "4px 6px", color: "#aaa" }}>{enc.feat_name ?? enc.alias_name ?? "—"}</td>
+                      <td style={{ padding: "4px 6px", textAlign: "right", color: "#8f8" }}>
+                        {Number(enc.overlap_area_sqm).toLocaleString(undefined, { maximumFractionDigits: 1 })}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 // ─── Collapsible JSON section ────────────────────────────────────────────────
 
-function Section({ title, objKey, data, collapsed = false }: { title: string; objKey?: string; data: unknown; collapsed?: boolean }) {
+function SqlBlock({ query }: { query: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ marginTop: 2, marginBottom: 2 }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{ cursor: "pointer", color: "#6a9955", fontSize: 11, userSelect: "none" }}
+      >
+        {open ? "▾" : "▸"} SQL
+      </div>
+      {open && (
+        <pre style={{
+          background: "#0d1117", padding: 8, borderRadius: 4,
+          overflow: "auto", maxHeight: 260, fontSize: 11, lineHeight: 1.4,
+          whiteSpace: "pre-wrap", wordBreak: "break-all", color: "#b8d7a3",
+          marginTop: 2,
+        }}>
+          {query}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, objKey, data, collapsed = false, query }: { title: string; objKey?: string; data: unknown; collapsed?: boolean; query?: string }) {
   const [open, setOpen] = useState(!collapsed);
   if (data === undefined || data === null) return null;
 
@@ -696,13 +857,16 @@ function Section({ title, objKey, data, collapsed = false }: { title: string; ob
         {objKey && <span style={{ color: "#555", fontWeight: "normal", fontSize: 11, marginLeft: 6 }}>.{objKey}</span>}
       </div>
       {open && (
-        <pre style={{
-          background: "#0f0f23", padding: 8, borderRadius: 4,
-          overflow: "auto", maxHeight: 300, fontSize: 11, lineHeight: 1.4,
-          whiteSpace: "pre-wrap", wordBreak: "break-all",
-        }}>
-          {JSON.stringify(data, null, 2)}
-        </pre>
+        <>
+          {query && <SqlBlock query={query} />}
+          <pre style={{
+            background: "#0f0f23", padding: 8, borderRadius: 4,
+            overflow: "auto", maxHeight: 300, fontSize: 11, lineHeight: 1.4,
+            whiteSpace: "pre-wrap", wordBreak: "break-all",
+          }}>
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </>
       )}
     </div>
   );

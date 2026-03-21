@@ -43,7 +43,25 @@ async function fetchGoldCoastOverlays(lot: string, plan: string): Promise<Record
     gcQuery("qld_goldcoast_airport_noise", "id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, sensitive_use_type, buffer_source, buffer_distance"),
   ]);
 
+  const parcelUnionExpr = `(SELECT ST_Union(geometry) FROM qld_cadastre_parcels WHERE lot = $1 AND plan = $2)`;
+  const _query_goldCoast = [
+    `-- zones\nSELECT id, zone_precinct, lvl1_zone, zone, building_height, bh_category\n  FROM qld_goldcoast_zones WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- buildingHeight\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, height_in_metres, storey_number, label, height_label\n  FROM qld_goldcoast_building_height WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- flood\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat\n  FROM qld_goldcoast_flood WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- bushfireHazard\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat\n  FROM qld_goldcoast_bushfire_hazard WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- minimumLotSize\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, mls\n  FROM qld_goldcoast_minimum_lot_size WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- residentialDensity\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, residential_density\n  FROM qld_goldcoast_residential_density WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- heritage\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, lhr_id, place_name, assessment_id, register_status, qld_heritage_register, heritage_protection_boundary, adjoining_allotments\n  FROM qld_goldcoast_heritage WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- heritageProximity\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, lhr_id, lot_plan, assessment_id, place_name, qld_heritage_register\n  FROM qld_goldcoast_heritage_proximity\n  WHERE lot_plan = $1 OR ST_Intersects(geometry, ${parcelUnionExpr})  -- params: [lot/plan, lot, plan]`,
+    `-- environmental\nSELECT id, category, cat_desc, ovl_cat, ovl2_desc, ovl2_cat\n  FROM qld_goldcoast_environmental WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- bufferArea\nSELECT id FROM qld_goldcoast_buffer_area WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- dwellingHouseOverlay\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat\n  FROM qld_goldcoast_dwelling_house_overlay WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- partyHouse\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat\n  FROM qld_goldcoast_party_house WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+    `-- airportNoise\nSELECT id, cat_desc, ovl_cat, ovl2_desc, ovl2_cat, sensitive_use_type, buffer_source, buffer_distance\n  FROM qld_goldcoast_airport_noise WHERE ST_Intersects(geometry, ${parcelUnionExpr})`,
+  ].join("\n\n");
+
   return {
+    _query_goldCoast,
     zones: zones.rows,
     buildingHeight: buildingHeight.rows,
     flood: flood.rows,
@@ -60,10 +78,46 @@ async function fetchGoldCoastOverlays(lot: string, plan: string): Promise<Record
   };
 }
 
-async function fetchDevApplications(lot: string, plan: string): Promise<Record<string, unknown>[]> {
+async function fetchEncumbrances(lot: string, plan: string): Promise<{ rows: Record<string, unknown>[]; query: string }> {
+  const sql = `WITH base AS (
+       SELECT id, geometry
+       FROM qld_cadastre_parcels
+       WHERE lot = $1 AND plan = $2
+       LIMIT 1
+     )
+     SELECT
+       o.id,
+       o.lotplan,
+       o.lot,
+       o.plan,
+       o.parcel_typ,
+       o.tenure,
+       o.feat_name,
+       o.alias_name,
+       ROUND(ST_Area(ST_Intersection(b.geometry, o.geometry)::geography)::numeric, 2) AS overlap_area_sqm,
+       ST_AsGeoJSON(ST_Intersection(b.geometry, o.geometry)) AS intersection_geojson,
+       ST_AsGeoJSON(o.geometry) AS full_geometry_json
+     FROM base b
+     JOIN qld_cadastre_parcels o ON ST_Intersects(b.geometry, o.geometry)
+     WHERE o.id != b.id
+       AND o.parcel_typ IS DISTINCT FROM 'Lot Type Parcel'
+       AND ST_Area(ST_Intersection(b.geometry, o.geometry)::geography) > 1
+     ORDER BY overlap_area_sqm DESC
+     LIMIT 50`;
+  const result = await db.query(sql, [lot, plan]);
+  return {
+    rows: result.rows.map((r) => ({
+      ...r,
+      intersection_geojson: r.intersection_geojson ? JSON.parse(r.intersection_geojson as string) : null,
+      full_geometry_json: r.full_geometry_json ? JSON.parse(r.full_geometry_json as string) : null,
+    })),
+    query: sql,
+  };
+}
+
+async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: Record<string, unknown>[]; query: string }> {
   const lotplan = `${lot}${plan}`;
-  const result = await db.query(
-    `SELECT application_number, description, application_type, lodgement_date, status,
+  const sql = `SELECT application_number, description, application_type, lodgement_date, status,
             suburb, location_address, lot_on_plan, lot_plan,
             pre_assessment_started, pre_assessment_completed,
             confirmation_notice_started, confirmation_notice_completed,
@@ -77,10 +131,9 @@ async function fetchDevApplications(lot: string, plan: string): Promise<Record<s
             first_scraped_at, last_scraped_at, detail_scraped_at
      FROM goldcoast_dev_applications
      WHERE lot_plan = $1
-     ORDER BY lodgement_date DESC`,
-    [lotplan]
-  );
-  return result.rows;
+     ORDER BY lodgement_date DESC`;
+  const result = await db.query(sql, [lotplan]);
+  return { rows: result.rows, query: sql };
 }
 
 async function handleLotPlanLookup(lot: string, plan: string): Promise<NextResponse> {
@@ -88,8 +141,7 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
 
   // All parcels for this lot/plan
   try {
-    const allPieces = await db.query(
-      `SELECT id, lot, plan, lotplan, lot_area, excl_area,
+    const allPiecesSql = `SELECT id, lot, plan, lotplan, lot_area, excl_area,
          seg_num, par_num, segpar, par_ind, lot_volume,
          surv_ind, tenure, prc, parish, county, lac,
          shire_name, feat_name, alias_name, loc, locality,
@@ -100,9 +152,10 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
          ST_Area(geometry::geography) AS area_m2_calc
        FROM qld_cadastre_parcels
        WHERE lot = $1 AND plan = $2
-       ORDER BY id`,
-      [lot, plan]
-    );
+       ORDER BY id`;
+    const allPieces = await db.query(allPiecesSql, [lot, plan]);
+    debug._query_allPiecesForMatchedLot = allPiecesSql;
+    debug._params_allPiecesForMatchedLot = [lot, plan];
 
     debug.allPiecesForMatchedLot = allPieces.rows.map((r) => ({ ...r, geometry_json: undefined }));
     debug.allPiecesForMatchedLotGeometries = allPieces.rows.map((r) => ({
@@ -115,11 +168,11 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
     }));
 
     if (allPieces.rows.length > 0) {
-      const unionResult = await db.query(
-        `SELECT ST_AsGeoJSON(ST_Union(geometry)) AS union_geometry_json
-         FROM qld_cadastre_parcels WHERE lot = $1 AND plan = $2`,
-        [lot, plan]
-      );
+      const unionSql = `SELECT ST_AsGeoJSON(ST_Union(geometry)) AS union_geometry_json
+         FROM qld_cadastre_parcels WHERE lot = $1 AND plan = $2`;
+      const unionResult = await db.query(unionSql, [lot, plan]);
+      debug._query_allPiecesUnionGeometry = unionSql;
+      debug._params_allPiecesUnionGeometry = [lot, plan];
       const unionJson = unionResult.rows[0]?.union_geometry_json;
       debug.allPiecesUnionGeometry = unionJson ? JSON.parse(unionJson) : null;
 
@@ -128,24 +181,27 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
       const centroidLat = parseFloat(firstRow.centroid_lat as string);
       const centroidLng = parseFloat(firstRow.centroid_lon as string);
 
+      const lgaSql = `SELECT id, lga_name FROM gnaf_admin_lga
+           WHERE ST_Within(ST_SetSRID(ST_MakePoint($1, $2), 7844), geom) LIMIT 1`;
+      const zoneSql = `SELECT id, zone_code, zone_name FROM qld_planning_zones
+           WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($1, $2), 7844), geometry) LIMIT 1`;
       const [lgaResult, zoneResult] = await Promise.all([
-        db.query(
-          `SELECT id, lga_name FROM gnaf_admin_lga
-           WHERE ST_Within(ST_SetSRID(ST_MakePoint($1, $2), 7844), geom) LIMIT 1`,
-          [centroidLng, centroidLat]
-        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
-        db.query(
-          `SELECT id, zone_code, zone_name FROM qld_planning_zones
-           WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($1, $2), 7844), geometry) LIMIT 1`,
-          [centroidLng, centroidLat]
-        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+        db.query(lgaSql, [centroidLng, centroidLat]).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+        db.query(zoneSql, [centroidLng, centroidLat]).catch(() => ({ rows: [] as Record<string, unknown>[] })),
       ]);
+      debug._query_lga = lgaSql;
+      debug._params_lga = [centroidLng, centroidLat];
+      debug._query_zoning = zoneSql;
+      debug._params_zoning = [centroidLng, centroidLat];
       debug.lga = lgaResult.rows[0] ?? null;
       debug.zoning = zoneResult.rows[0] ?? null;
 
       const lgaName = (debug.lga as Record<string, unknown> | null)?.lga_name as string | undefined;
       if (lgaName?.toLowerCase().includes("gold coast")) {
-        debug.goldCoast = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+        const gcResult = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+        const { _query_goldCoast, ...gcData } = gcResult as Record<string, unknown>;
+        debug.goldCoast = gcData;
+        debug._query_goldCoast = _query_goldCoast;
       }
     } else {
       debug.error = `No parcels found for lot ${lot} / plan ${plan}`;
@@ -156,15 +212,28 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
 
   // Dev applications
   try {
-    debug.devApplications = await fetchDevApplications(lot, plan);
+    const daResult = await fetchDevApplications(lot, plan);
+    debug.devApplications = daResult.rows;
+    debug._query_devApplications = daResult.query;
+    debug._params_devApplications = [`${lot}${plan}`];
   } catch (err) {
     debug.devApplicationsError = err instanceof Error ? err.message : String(err);
   }
 
+  // Encumbrances
+  try {
+    const encResult = await fetchEncumbrances(lot, plan);
+    debug.encumbrances = encResult.rows;
+    debug._query_encumbrances = encResult.query;
+    debug._params_encumbrances = [lot, plan];
+    debug._tableRef_encumbrances = "qld_cadastre_parcels (parcel_typ != 'Lot Type Parcel', ST_Intersects with base parcel)";
+  } catch (err) {
+    debug.encumbrancesError = err instanceof Error ? err.message : String(err);
+  }
+
   // All addresses on this plan
   try {
-    const allAddrs = await db.query(
-      `SELECT id, lot, plan, lotplan,
+    const allAddrsSql = `SELECT id, lot, plan, lotplan,
          unit_type, unit_number, unit_suffix,
          floor_type, floor_number, floor_suffix,
          property_name,
@@ -176,9 +245,10 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
          latitude, longitude
        FROM qld_cadastre_address
        WHERE plan = $1
-       ORDER BY lot, street_number`,
-      [plan]
-    );
+       ORDER BY lot, street_number`;
+    const allAddrs = await db.query(allAddrsSql, [plan]);
+    debug._query_allAddressesOnPlan = allAddrsSql;
+    debug._params_allAddressesOnPlan = [plan];
     debug.allAddressesOnPlan = allAddrs.rows;
   } catch (err) {
     debug.allAddressesOnPlanError = err instanceof Error ? err.message : String(err);
@@ -327,8 +397,7 @@ export async function GET(req: NextRequest) {
       const numberFirstSuffix = parsed.streetNumber.replace(/^\d+/, "").toUpperCase() || null;
 
       // All columns from address_detail + joined street/locality/state + geocode point
-      const gnafResult = await db.query(
-        `SELECT
+      const gnafSql = `SELECT
            ad.address_detail_pid,
            ad.date_created, ad.date_last_modified, ad.date_retired,
            ad.building_name,
@@ -360,9 +429,12 @@ export async function GET(req: NextRequest) {
            AND ad.postcode = $4
            AND s.state_abbreviation = UPPER($5)
            AND ad.date_retired IS NULL
-         LIMIT 20`,
+         LIMIT 20`;
+      const gnafResult = await db.query(gnafSql,
         [numberFirst, parsed.route, parsed.locality, parsed.postalCode, parsed.administrativeArea, numberFirstSuffix]
       );
+      debug._query_gnaf = gnafSql;
+      debug._params_gnaf = [numberFirst, parsed.route, parsed.locality, parsed.postalCode, parsed.administrativeArea, numberFirstSuffix];
       debug.gnaf = gnafResult.rows;
 
       // Extract GNAF geocode point for map
@@ -377,8 +449,7 @@ export async function GET(req: NextRequest) {
       // All geocode points for matched addresses (all geocode types)
       const pids = gnafResult.rows.map((r) => r.address_detail_pid);
       if (pids.length > 0) {
-        const geocodesResult = await db.query(
-          `SELECT
+        const gnafGeocodesSql = `SELECT
              asg.address_detail_pid,
              asg.geocode_type_code,
              gt.name AS geocode_type_name,
@@ -388,9 +459,10 @@ export async function GET(req: NextRequest) {
            LEFT JOIN gnaf_data_geocode_type_aut gt ON gt.code = asg.geocode_type_code
            WHERE asg.address_detail_pid = ANY($1)
              AND asg.date_retired IS NULL
-           ORDER BY asg.address_detail_pid, asg.geocode_type_code`,
-          [pids]
-        );
+           ORDER BY asg.address_detail_pid, asg.geocode_type_code`;
+        const geocodesResult = await db.query(gnafGeocodesSql, [pids]);
+        debug._query_gnafGeocodes = gnafGeocodesSql;
+        debug._params_gnafGeocodes = ["[...address_detail_pids]"];
         debug.gnafGeocodes = geocodesResult.rows;
       }
     } else {
@@ -405,8 +477,7 @@ export async function GET(req: NextRequest) {
   // ── 3. Spatial cadastre lookup (ST_Contains) — all parcel columns ───
   let spatialPrimaryRows: Record<string, unknown>[] = [];
   try {
-    const spatialPrimary = await db.query(
-      `SELECT
+    const spatialContainsSql = `SELECT
          id, lot, plan, lotplan, lot_area, excl_area,
          seg_num, par_num, segpar, par_ind, lot_volume,
          surv_ind, tenure, prc, parish, county, lac,
@@ -419,9 +490,10 @@ export async function GET(req: NextRequest) {
        FROM qld_cadastre_parcels
        WHERE ST_Contains(geometry, ST_SetSRID(ST_MakePoint($1, $2), 7844))
        ORDER BY lot_area ASC
-       LIMIT 10`,
-      [geocodeLng, geocodeLat]
-    );
+       LIMIT 10`;
+    const spatialPrimary = await db.query(spatialContainsSql, [geocodeLng, geocodeLat]);
+    debug._query_cadastreSpatialContains = spatialContainsSql;
+    debug._params_cadastreSpatialContains = [geocodeLng, geocodeLat];
     spatialPrimaryRows = spatialPrimary.rows;
     debug.cadastreSpatialContains = spatialPrimary.rows.map((r) => ({
       ...r, geometry_json: undefined,
@@ -436,16 +508,16 @@ export async function GET(req: NextRequest) {
     // All geometry rows for the matched lot/plan (multi-piece lots)
     if (spatialPrimaryRows.length > 0) {
       const topLotType = spatialPrimaryRows.find((r) => r.parcel_typ === "Lot Type Parcel") ?? spatialPrimaryRows[0];
-      const allPieces = await db.query(
-        `SELECT id, lot, plan, lotplan,
+      const allPiecesSql = `SELECT id, lot, plan, lotplan,
            ST_AsGeoJSON(geometry) AS geometry_json,
            ST_Y(ST_Centroid(geometry)) AS centroid_lat,
            ST_X(ST_Centroid(geometry)) AS centroid_lon
          FROM qld_cadastre_parcels
          WHERE lot = $1 AND plan = $2
-         ORDER BY id`,
-        [topLotType.lot, topLotType.plan]
-      );
+         ORDER BY id`;
+      const allPieces = await db.query(allPiecesSql, [topLotType.lot, topLotType.plan]);
+      debug._query_allPiecesForMatchedLot = allPiecesSql;
+      debug._params_allPiecesForMatchedLot = [topLotType.lot, topLotType.plan];
       debug.allPiecesForMatchedLot = allPieces.rows.map((r) => ({ ...r, geometry_json: undefined }));
       debug.allPiecesForMatchedLotGeometries = allPieces.rows.map((r) => ({
         lot: r.lot,
@@ -457,12 +529,12 @@ export async function GET(req: NextRequest) {
       }));
 
       // Union of all pieces — outer boundary
-      const unionResult = await db.query(
-        `SELECT ST_AsGeoJSON(ST_Union(geometry)) AS union_geometry_json
+      const unionSql2 = `SELECT ST_AsGeoJSON(ST_Union(geometry)) AS union_geometry_json
          FROM qld_cadastre_parcels
-         WHERE lot = $1 AND plan = $2`,
-        [topLotType.lot, topLotType.plan]
-      );
+         WHERE lot = $1 AND plan = $2`;
+      const unionResult = await db.query(unionSql2, [topLotType.lot, topLotType.plan]);
+      debug._query_allPiecesUnionGeometry = unionSql2;
+      debug._params_allPiecesUnionGeometry = [topLotType.lot, topLotType.plan];
       const unionJson = unionResult.rows[0]?.union_geometry_json;
       debug.allPiecesUnionGeometry = unionJson ? JSON.parse(unionJson) : null;
     }
@@ -472,8 +544,7 @@ export async function GET(req: NextRequest) {
 
   // ── 3b. Fallback: ST_DWithin — all parcel columns ──────────────────
   try {
-    const spatialFallback = await db.query(
-      `SELECT
+    const dwithinSql = `SELECT
          id, lot, plan, lotplan, lot_area, excl_area,
          seg_num, par_num, segpar, par_ind, lot_volume,
          surv_ind, tenure, prc, parish, county, lac,
@@ -487,9 +558,10 @@ export async function GET(req: NextRequest) {
        WHERE ST_DWithin(geometry, ST_SetSRID(ST_MakePoint($1, $2), 7844), 0.0005)
          AND parcel_typ = 'Lot Type Parcel'
        ORDER BY distance ASC
-       LIMIT 5`,
-      [geocodeLng, geocodeLat]
-    );
+       LIMIT 5`;
+    const spatialFallback = await db.query(dwithinSql, [geocodeLng, geocodeLat]);
+    debug._query_cadastreDWithin = dwithinSql;
+    debug._params_cadastreDWithin = [geocodeLng, geocodeLat];
     debug.cadastreDWithin = spatialFallback.rows.map((r) => ({
       ...r, geometry_json: undefined,
     }));
@@ -519,8 +591,7 @@ export async function GET(req: NextRequest) {
       debug.refinementInput = { refinementNumber, streetNameOnly, plan: topParcel.plan };
 
       // All cadastre_address columns + joined parcel geometry
-      const refinement = await db.query(
-        `SELECT
+      const refinementSql = `SELECT
            ca.id, ca.lot, ca.plan, ca.lotplan,
            ca.unit_type, ca.unit_number, ca.unit_suffix,
            ca.floor_type, ca.floor_number, ca.floor_suffix,
@@ -542,9 +613,10 @@ export async function GET(req: NextRequest) {
          WHERE ca.plan = $1
            AND ca.street_number = $2
            AND UPPER(ca.street_name) = UPPER($3)
-         LIMIT 10`,
-        [topParcel.plan, refinementNumber, streetNameOnly]
-      );
+         LIMIT 10`;
+      const refinement = await db.query(refinementSql, [topParcel.plan, refinementNumber, streetNameOnly]);
+      debug._query_addressRefinement = refinementSql;
+      debug._params_addressRefinement = [topParcel.plan, refinementNumber, streetNameOnly];
       debug.addressRefinement = refinement.rows.map((r) => ({
         ...r, addr_geometry_json: undefined, parcel_geometry_json: undefined,
       }));
@@ -558,8 +630,7 @@ export async function GET(req: NextRequest) {
       }));
 
       // All addresses on this plan — all columns
-      const allAddrs = await db.query(
-        `SELECT
+      const allAddrsOnPlanSql = `SELECT
            id, lot, plan, lotplan,
            unit_type, unit_number, unit_suffix,
            floor_type, floor_number, floor_suffix,
@@ -572,9 +643,10 @@ export async function GET(req: NextRequest) {
            latitude, longitude
          FROM qld_cadastre_address
          WHERE plan = $1
-         ORDER BY lot, street_number`,
-        [topParcel.plan]
-      );
+         ORDER BY lot, street_number`;
+      const allAddrs = await db.query(allAddrsOnPlanSql, [topParcel.plan]);
+      debug._query_allAddressesOnPlan = allAddrsOnPlanSql;
+      debug._params_allAddressesOnPlan = [topParcel.plan];
       debug.allAddressesOnPlan = allAddrs.rows;
     }
   } catch (err) {
@@ -588,8 +660,7 @@ export async function GET(req: NextRequest) {
       const refinementNumber = rawNumberMatch?.[1]?.toUpperCase() ?? parsed.streetNumber;
       const streetNameOnly = parsed.route.split(" ").slice(0, -1).join(" ") || parsed.route;
 
-      const cadastreAddrDirect = await db.query(
-        `SELECT
+      const cadastreAddrDirectSql = `SELECT
            ca.id, ca.lot, ca.plan, ca.lotplan,
            ca.unit_type, ca.unit_number,
            ca.property_name,
@@ -610,9 +681,10 @@ export async function GET(req: NextRequest) {
            AND UPPER(ca.street_name) = UPPER($2)
            AND ($3::text IS NULL OR UPPER(ca.locality) = UPPER($3))
          ORDER BY ca.plan, ca.lot
-         LIMIT 20`,
-        [refinementNumber, streetNameOnly, parsed.locality]
-      );
+         LIMIT 20`;
+      const cadastreAddrDirect = await db.query(cadastreAddrDirectSql, [refinementNumber, streetNameOnly, parsed.locality]);
+      debug._query_cadastreAddressDirect = cadastreAddrDirectSql;
+      debug._params_cadastreAddressDirect = [refinementNumber, streetNameOnly, parsed.locality];
       debug.cadastreAddressDirect = cadastreAddrDirect.rows.map((r) => ({
         ...r, parcel_geometry_json: undefined,
       }));
@@ -632,20 +704,20 @@ export async function GET(req: NextRequest) {
 
   // ── 6. LGA + Zoning ─────────────────────────────────────────────────
   try {
-    const [lgaResult, zoneResult] = await Promise.all([
-      db.query(
-        `SELECT id, lga_name FROM gnaf_admin_lga
+    const lgaSql2 = `SELECT id, lga_name FROM gnaf_admin_lga
          WHERE ST_Within(ST_SetSRID(ST_MakePoint($1, $2), 7844), geom)
-         LIMIT 1`,
-        [geocodeLng, geocodeLat]
-      ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
-      db.query(
-        `SELECT id, zone_code, zone_name FROM qld_planning_zones
+         LIMIT 1`;
+    const zoneSql2 = `SELECT id, zone_code, zone_name FROM qld_planning_zones
          WHERE ST_Intersects(ST_SetSRID(ST_MakePoint($1, $2), 7844), geometry)
-         LIMIT 1`,
-        [geocodeLng, geocodeLat]
-      ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+         LIMIT 1`;
+    const [lgaResult, zoneResult] = await Promise.all([
+      db.query(lgaSql2, [geocodeLng, geocodeLat]).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+      db.query(zoneSql2, [geocodeLng, geocodeLat]).catch(() => ({ rows: [] as Record<string, unknown>[] })),
     ]);
+    debug._query_lga = lgaSql2;
+    debug._params_lga = [geocodeLng, geocodeLat];
+    debug._query_zoning = zoneSql2;
+    debug._params_zoning = [geocodeLng, geocodeLat];
     debug.lga = lgaResult.rows[0] ?? null;
     debug.zoning = zoneResult.rows[0] ?? null;
   } catch (err) {
@@ -659,7 +731,10 @@ export async function GET(req: NextRequest) {
     const lot = topLot?.lot as string | undefined;
     const plan = topLot?.plan as string | undefined;
     if (lot && plan) {
-      debug.goldCoast = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+      const gcResult = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+      const { _query_goldCoast, ...gcData } = gcResult as Record<string, unknown>;
+      debug.goldCoast = gcData;
+      debug._query_goldCoast = _query_goldCoast;
     }
   }
 
@@ -667,9 +742,26 @@ export async function GET(req: NextRequest) {
   const topLotForDA = spatialPrimaryRows.find((r) => r.parcel_typ === "Lot Type Parcel") ?? spatialPrimaryRows[0];
   if (topLotForDA?.lot && topLotForDA?.plan) {
     try {
-      debug.devApplications = await fetchDevApplications(topLotForDA.lot as string, topLotForDA.plan as string);
+      const daResult = await fetchDevApplications(topLotForDA.lot as string, topLotForDA.plan as string);
+      debug.devApplications = daResult.rows;
+      debug._query_devApplications = daResult.query;
+      debug._params_devApplications = [`${topLotForDA.lot}${topLotForDA.plan}`];
     } catch (err) {
       debug.devApplicationsError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // ── 9. Encumbrances ──────────────────────────────────────────────────
+  const topLotForEnc = spatialPrimaryRows.find((r) => r.parcel_typ === "Lot Type Parcel") ?? spatialPrimaryRows[0];
+  if (topLotForEnc?.lot && topLotForEnc?.plan) {
+    try {
+      const encResult = await fetchEncumbrances(topLotForEnc.lot as string, topLotForEnc.plan as string);
+      debug.encumbrances = encResult.rows;
+      debug._query_encumbrances = encResult.query;
+      debug._params_encumbrances = [topLotForEnc.lot, topLotForEnc.plan];
+      debug._tableRef_encumbrances = "qld_cadastre_parcels (parcel_typ != 'Lot Type Parcel', ST_Intersects with base parcel)";
+    } catch (err) {
+      debug.encumbrancesError = err instanceof Error ? err.message : String(err);
     }
   }
 
