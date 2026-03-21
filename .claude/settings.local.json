@@ -15,7 +15,11 @@
       "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \":*)",
       "WebFetch(domain:www.goldcoast.qld.gov.au)",
       "WebSearch",
-      "WebFetch(domain:www.findasite.net.au)"
+      "WebFetch(domain:www.findasite.net.au)",
+      "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \"SELECT DISTINCT zone_code, zone_name, category FROM qld_planning_zones LIMIT 50;\")",
+      "Bash(find /Users/Nathan/IdeaProjects/vibing/realestatev2/web/app/api -name *encumbrance* -o -name *easement*)",
+      "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \"SELECT DISTINCT zone_code, zone_name FROM qld_planning_zones LIMIT 50;\")",
+      "WebFetch(domain:services-ap1.arcgis.com)"
     ]
   }
 }

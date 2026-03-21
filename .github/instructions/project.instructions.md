@@ -139,3 +139,12 @@ python -c "from ultralytics import YOLO; YOLO('yolov8s.pt')"
 - **Phase 1 (current):** Public prototype — address search, property analysis, LGA/zoning lookup, blog. No auth required.
 - **Phase 2:** Auth + paywall — login, save properties/markups, multi-property tracking, subdivision journey tracking.
 - **Phase 3:** Multi-state — NSW, VIC support. Schema already includes `state`/`jurisdiction` columns.
+
+
+# Git Commits
+
+Every completed task should result in a git commit operation. Ensure GIT Commits are regularly completed.
+
+# MEMORY - IMPORTANT!
+
+You will read memory from this file `@/Users/Nathan/.claude/projects/-Users-Nathan-IdeaProjects-vibing-realestatev2/memory/MEMORY.md`. You must read this file and follow all the instructions and file references you are instructed to follow within the MEMORY.md file
