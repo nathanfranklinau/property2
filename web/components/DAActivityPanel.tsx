@@ -577,7 +577,7 @@ export function DAActivityPanel({
         {!nearbyLoading && nearbyDAs !== null && nearbyTotal > 0 && (
           <>
             {/* ── Filters ── */}
-            <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 mb-3 overflow-hidden">
+            <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 mb-3">
               {/* Filter header */}
               <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-zinc-800/80 bg-zinc-800/40">
                 <div className="flex items-center gap-1.5 text-zinc-400">
@@ -640,7 +640,7 @@ export function DAActivityPanel({
                             <span className={active ? meta.color : "text-zinc-600"}>{meta.icon}</span>
                             {label}
                           </button>
-                          <div className="absolute bottom-full left-0 mb-1.5 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 text-[10px] text-zinc-300 leading-relaxed pointer-events-none">
+                          <div className="absolute top-full left-0 mt-1.5 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 text-[10px] text-zinc-300 leading-relaxed pointer-events-none">
                             <p className={`font-semibold mb-1 ${meta.color}`}>{meta.label}</p>
                             <p className="text-zinc-400">{meta.tooltip}</p>
                           </div>
