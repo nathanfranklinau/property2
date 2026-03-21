@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { DevelopmentApplication } from "@/app/api/analysis/das/route";
 import type { NearbyDA } from "@/app/api/analysis/nearby-das/route";
 
@@ -440,6 +440,7 @@ type Props = {
   onNearbyRadiusChange: (r: number) => void;
   showOnMap: boolean;
   onShowOnMapChange: (v: boolean) => void;
+  onFilteredDAsChange?: (das: NearbyDA[]) => void;
   loading: boolean;
   nearbyLoading: boolean;
 };
@@ -460,6 +461,7 @@ export function DAActivityPanel({
   onNearbyRadiusChange,
   showOnMap,
   onShowOnMapChange,
+  onFilteredDAsChange,
   loading,
   nearbyLoading,
 }: Props) {
@@ -498,6 +500,10 @@ export function DAActivityPanel({
 
   const filteredCount = filteredNearbyDAs.length;
   const hasActiveFilters = filterTypes.length > 0 || filterStatuses.length > 0 || filterTimeRange !== "all";
+
+  useEffect(() => {
+    onFilteredDAsChange?.(filteredNearbyDAs);
+  }, [filteredNearbyDAs, onFilteredDAsChange]);
 
   function toggleType(label: string) {
     setFilterTypes((prev) => prev.includes(label) ? prev.filter((t) => t !== label) : [...prev, label]);

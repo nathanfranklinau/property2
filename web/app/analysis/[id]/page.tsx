@@ -572,6 +572,7 @@ export default function AnalysisPage() {
   const [nearbyDATotal, setNearbyDATotal] = useState(0);
   const [nearbyDASummary, setNearbyDASummary] = useState<{ by_type: Record<string, number>; by_category: Record<string, number>; by_status: Record<string, number> } | null>(null);
   const [showDAsOnMap, setShowDAsOnMap] = useState(false);
+  const [filteredNearbyDAs, setFilteredNearbyDAs] = useState<import("@/app/api/analysis/nearby-das/route").NearbyDA[] | null>(null);
 
   const bufferCoords = useMemo(() => {
     if (!status?.boundary_coords_gda94) return [];
@@ -927,7 +928,7 @@ export default function AnalysisPage() {
                   complexBoundary={complexBoundaryRings}
                   nearbySubdivisions={nearbyBoundaries}
                   focusedNearbyPlan={focusedNearbyPlan}
-                  daMarkers={showDAsOnMap && nearbyDAs ? buildDAMapMarkers(nearbyDAs) : undefined}
+                  daMarkers={showDAsOnMap && filteredNearbyDAs ? buildDAMapMarkers(filteredNearbyDAs) : undefined}
                 />
               )}
           </div>
@@ -1524,6 +1525,7 @@ export default function AnalysisPage() {
                 onNearbyRadiusChange={setNearbyDARadius}
                 showOnMap={showDAsOnMap}
                 onShowOnMapChange={setShowDAsOnMap}
+                onFilteredDAsChange={setFilteredNearbyDAs}
                 loading={dasLoading}
                 nearbyLoading={nearbyDAsLoading}
               />
