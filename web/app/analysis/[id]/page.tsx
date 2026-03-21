@@ -1307,20 +1307,6 @@ export default function AnalysisPage() {
                 </>
               )}
 
-              {/* Development Activity (Gold Coast only) */}
-              <DAActivityPanel
-                parcelDAs={das}
-                nearbyDAs={nearbyDAs}
-                nearbyTotal={nearbyDATotal}
-                nearbySummary={nearbyDASummary}
-                nearbyRadius={nearbyDARadius}
-                onNearbyRadiusChange={setNearbyDARadius}
-                showOnMap={showDAsOnMap}
-                onShowOnMapChange={setShowDAsOnMap}
-                loading={dasLoading}
-                nearbyLoading={nearbyDAsLoading}
-              />
-
               {cityPlan && (
                 <>
                   {(cityPlan.bushfire_hazard || cityPlan.airport_noise || cityPlan.buffer_area || cityPlan.dwelling_house_overlay || cityPlan.flood || cityPlan.heritage || cityPlan.heritage_proximity || cityPlan.environmental_significance) && (
@@ -1444,6 +1430,20 @@ export default function AnalysisPage() {
                   )}
                 </>
               )}
+
+              {/* Development Activity (Gold Coast only) */}
+              <DAActivityPanel
+                parcelDAs={das}
+                nearbyDAs={nearbyDAs}
+                nearbyTotal={nearbyDATotal}
+                nearbySummary={nearbyDASummary}
+                nearbyRadius={nearbyDARadius}
+                onNearbyRadiusChange={setNearbyDARadius}
+                showOnMap={showDAsOnMap}
+                onShowOnMapChange={setShowDAsOnMap}
+                loading={dasLoading}
+                nearbyLoading={nearbyDAsLoading}
+              />
 
               {/* Nearby Subdivision Activity */}
               {typeInfo.allowSubdivision && (nearbyLoading || nearbyData) && (

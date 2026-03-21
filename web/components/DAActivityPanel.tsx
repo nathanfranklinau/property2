@@ -577,75 +577,101 @@ export function DAActivityPanel({
         {!nearbyLoading && nearbyDAs !== null && nearbyTotal > 0 && (
           <>
             {/* ── Filters ── */}
-            <div className="space-y-2 mb-3">
-              {/* Time range */}
-              <div className="flex items-center gap-1 flex-wrap">
-                <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Period</span>
-                {(["all", "6m", "1y", "2y"] as const).map((range) => (
+            <div className="rounded-lg border border-zinc-700/60 bg-zinc-900/80 mb-3 overflow-hidden">
+              {/* Filter header */}
+              <div className="flex items-center justify-between px-2.5 py-1.5 border-b border-zinc-800/80 bg-zinc-800/40">
+                <div className="flex items-center gap-1.5 text-zinc-400">
+                  <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+                  </svg>
+                  <span className="text-[10px] font-semibold tracking-wide">Filters</span>
+                </div>
+                {hasActiveFilters && (
                   <button
-                    key={range}
-                    onClick={() => setFilterTimeRange(range)}
-                    className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                      filterTimeRange === range
-                        ? "bg-zinc-700 text-zinc-200"
-                        : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
-                    }`}
+                    onClick={() => { setFilterTypes([]); setFilterStatuses([]); setFilterTimeRange("all"); }}
+                    className="text-[9px] text-zinc-500 hover:text-zinc-200 transition-colors flex items-center gap-1"
                   >
-                    {range === "all" ? "All time" : range === "6m" ? "6 months" : range === "1y" ? "1 year" : "2 years"}
+                    <svg className="w-2.5 h-2.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                    Clear all
                   </button>
-                ))}
+                )}
+              </div>
+
+              {/* Time range */}
+              <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-zinc-800/60">
+                <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-widest w-10 flex-shrink-0">Period</span>
+                <div className="flex gap-1 flex-wrap">
+                  {(["all", "6m", "1y", "2y"] as const).map((range) => (
+                    <button
+                      key={range}
+                      onClick={() => setFilterTimeRange(range)}
+                      className={`text-[10px] px-2 py-0.5 rounded-md font-medium transition-all ${
+                        filterTimeRange === range
+                          ? "bg-zinc-600 text-white shadow-sm"
+                          : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                      }`}
+                    >
+                      {range === "all" ? "All" : range === "6m" ? "6 mo" : range === "1y" ? "1 yr" : "2 yr"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Type filter chips with tooltips */}
               {availableTypes.length > 1 && (
-                <div className="flex items-center gap-1 flex-wrap">
-                  <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Type</span>
-                  {availableTypes.map((label) => {
-                    // Find the full meta for tooltip — match by shortLabel
-                    const meta = daTypeMeta(nearbyDAs.find((d) => daTypeMeta(d.application_type).shortLabel === label)?.application_type ?? null);
-                    const active = filterTypes.includes(label);
-                    return (
-                      <div key={label} className="relative group">
-                        <button
-                          onClick={() => toggleType(label)}
-                          className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                            active
-                              ? `bg-zinc-700 ${meta.color} border border-zinc-600`
-                              : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
-                          }`}
-                        >
-                          <span className={active ? meta.color : "text-zinc-600"}>{meta.icon}</span>
-                          {label}
-                        </button>
-                        <div className="absolute bottom-full left-0 mb-1.5 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 text-[10px] text-zinc-300 leading-relaxed pointer-events-none">
-                          <p className={`font-semibold mb-1 ${meta.color}`}>{meta.label}</p>
-                          <p className="text-zinc-400">{meta.tooltip}</p>
+                <div className="flex items-start gap-1.5 px-2.5 py-2 border-b border-zinc-800/60">
+                  <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-widest w-10 flex-shrink-0 mt-0.5">Type</span>
+                  <div className="flex gap-1 flex-wrap">
+                    {availableTypes.map((label) => {
+                      const meta = daTypeMeta(nearbyDAs.find((d) => daTypeMeta(d.application_type).shortLabel === label)?.application_type ?? null);
+                      const active = filterTypes.includes(label);
+                      return (
+                        <div key={label} className="relative group">
+                          <button
+                            onClick={() => toggleType(label)}
+                            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md font-medium transition-all ${
+                              active
+                                ? `bg-zinc-600 ${meta.color} shadow-sm ring-1 ring-inset ring-white/10`
+                                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                            }`}
+                          >
+                            <span className={active ? meta.color : "text-zinc-600"}>{meta.icon}</span>
+                            {label}
+                          </button>
+                          <div className="absolute bottom-full left-0 mb-1.5 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 text-[10px] text-zinc-300 leading-relaxed pointer-events-none">
+                            <p className={`font-semibold mb-1 ${meta.color}`}>{meta.label}</p>
+                            <p className="text-zinc-400">{meta.tooltip}</p>
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
               {/* Status filter */}
-              <div className="flex items-center gap-1 flex-wrap">
-                <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Status</span>
-                {(["approved", "current", "refused", "withdrawn"] as const).map((bucket) => {
-                  const active = filterStatuses.includes(bucket);
-                  const label = bucket.charAt(0).toUpperCase() + bucket.slice(1);
-                  return (
-                    <button
-                      key={bucket}
-                      onClick={() => toggleStatus(bucket)}
-                      className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded transition-colors ${
-                        active ? STATUS_STYLES[bucket] : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
-                      }`}
-                    >
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? STATUS_DOT[bucket] : "bg-zinc-700"}`} />
-                      {label}
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-1.5 px-2.5 py-2">
+                <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-widest w-10 flex-shrink-0">Status</span>
+                <div className="flex gap-1 flex-wrap">
+                  {(["approved", "current", "refused", "withdrawn"] as const).map((bucket) => {
+                    const active = filterStatuses.includes(bucket);
+                    const label = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+                    return (
+                      <button
+                        key={bucket}
+                        onClick={() => toggleStatus(bucket)}
+                        className={`inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-md font-medium transition-all ${
+                          active ? `${STATUS_STYLES[bucket]} shadow-sm` : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800"
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? STATUS_DOT[bucket] : "bg-zinc-700"}`} />
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
