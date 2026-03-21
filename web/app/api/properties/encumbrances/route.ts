@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
          o.parcel_typ,
          o.tenure,
          ST_Area(ST_Intersection(b.geometry, o.geometry)::geography) AS overlap_area_sqm,
-         ST_AsGeoJSON(ST_Intersection(b.geometry, o.geometry))       AS intersection_geojson
+         ST_AsGeoJSON(ST_Transform(ST_Intersection(b.geometry, o.geometry), 4283)) AS intersection_geojson
        FROM base b
        JOIN qld_cadastre_parcels o ON ST_Intersects(b.geometry, o.geometry)
        WHERE o.id != b.id
