@@ -1520,12 +1520,12 @@ function MapInterior({
         const poly = new google.maps.Polygon({
           paths: path,
           fillColor: fill,
-          fillOpacity: 0.35,
+          fillOpacity: 0.45,
           strokeColor: stroke,
-          strokeWeight: 2,
-          strokeOpacity: 0.8,
+          strokeWeight: 2.5,
+          strokeOpacity: 1,
           clickable: false,
-          zIndex: 3,
+          zIndex: 12,
           map,
         });
         encumbrancePolysRef.current.push(poly);
@@ -1537,7 +1537,7 @@ function MapInterior({
           position: centroid,
           icon: labelSvg,
           clickable: false,
-          zIndex: 4,
+          zIndex: 13,
           map,
         });
         encumbranceLabelMarkersRef.current.push(marker);
@@ -1869,6 +1869,8 @@ export default function PropertyMap({
   centroid,
   footprints,
   onFootprintsChange,
+  encumbrances,
+  visibleEncumbranceTypes,
   readOnly,
   complexBoundary,
   nearbySubdivisions,
@@ -1894,6 +1896,8 @@ export default function PropertyMap({
             boundaryCoords={boundaryCoords}
             footprints={footprints}
             onFootprintsChange={onFootprintsChange}
+            encumbrances={encumbrances}
+            visibleEncumbranceTypes={visibleEncumbranceTypes}
             readOnly={readOnly}
             complexBoundary={complexBoundary}
             nearbySubdivisions={nearbySubdivisions}

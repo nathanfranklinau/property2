@@ -12,7 +12,7 @@ const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
   ),
 });
 
-import { simplifyFootprint, computeBufferCoords, type BuildingFootprint } from "@/components/PropertyMap";
+import { simplifyFootprint, computeBufferCoords, ENCUMBRANCE_COLOURS, type BuildingFootprint, type Encumbrance } from "@/components/PropertyMap";
 import { classifyProperty, PROPERTY_TYPE_COLORS, type PropertyType, type PropertyTypeInfo } from "@/lib/property-type";
 import { PlanTypeIcon } from "@/components/PlanTypeIcon";
 import { getZoneDefinition } from "@/lib/zone-definitions";
@@ -563,6 +563,7 @@ export default function AnalysisPage() {
   const [unitAddresses, setUnitAddresses] = useState<string[] | null>(null);
   const [unitAddressesLoading, setUnitAddressesLoading] = useState(false);
   const [cityPlan, setCityPlan] = useState<CityPlanData | null>(null);
+  const [encumbrances, setEncumbrances] = useState<Encumbrance[]>([]);
   const [das, setDas] = useState<import("@/app/api/analysis/das/route").DevelopmentApplication[] | null>(null);
   const [dasLoading, setDasLoading] = useState(false);
   const [nearbyDAs, setNearbyDAs] = useState<import("@/app/api/analysis/nearby-das/route").NearbyDA[] | null>(null);
@@ -585,10 +586,15 @@ export default function AnalysisPage() {
     [footprints, bufferCoords]
   );
 
+  const encumbranceArea = useMemo(
+    () => encumbrances.reduce((sum, e) => sum + e.area_sqm, 0),
+    [encumbrances]
+  );
+
   const freeSpace = useMemo(() => {
     if (status?.lot_area_sqm == null) return status?.available_space_sqm ?? null;
-    return Math.max(0, status.lot_area_sqm - totalStructuresArea);
-  }, [status?.lot_area_sqm, status?.available_space_sqm, totalStructuresArea]);
+    return Math.max(0, status.lot_area_sqm - totalStructuresArea - encumbranceArea);
+  }, [status?.lot_area_sqm, status?.available_space_sqm, totalStructuresArea, encumbranceArea]);
 
   // Property type classification — must be before any early returns (Rules of Hooks)
   const typeInfo: PropertyTypeInfo = useMemo(
@@ -669,6 +675,12 @@ export default function AnalysisPage() {
           fetch(`/api/analysis/cityplan?parcel_id=${encodeURIComponent(parcelId)}`)
             .then((r) => r.ok ? r.json() : null)
             .then((d) => { if (d) setCityPlan(d); })
+            .catch(() => {});
+
+          // Fetch encumbrances (easements, roads, watercourses, covenants…)
+          fetch(`/api/properties/encumbrances?lot=${encodeURIComponent(data.cadastre_lot)}&plan=${encodeURIComponent(data.cadastre_plan)}`)
+            .then((r) => r.ok ? r.json() : null)
+            .then((d) => { if (d?.encumbrances) setEncumbrances(d.encumbrances); })
             .catch(() => {});
 
           setDasLoading(true);
@@ -911,6 +923,7 @@ export default function AnalysisPage() {
                   footprints={footprints}
                   onFootprintsChange={setFootprints}
                   readOnly={!typeInfo.allowDrawingTools}
+                  encumbrances={encumbrances}
                   complexBoundary={complexBoundaryRings}
                   nearbySubdivisions={nearbyBoundaries}
                   focusedNearbyPlan={focusedNearbyPlan}
@@ -1076,6 +1089,18 @@ export default function AnalysisPage() {
                           </span>
                         </p>
                       </div>
+                      {encumbranceArea > 0 && (
+                        <>
+                          <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
+                          <div>
+                            <p className="text-[11px] text-amber-400/80 mb-0.5 uppercase tracking-wider font-medium">Encumbered</p>
+                            <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-amber-300">
+                              {Math.round(encumbranceArea).toLocaleString()}
+                              <span className="text-sm font-medium text-amber-400/70 ml-0.5">m²</span>
+                            </p>
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
                 </div>
@@ -1202,6 +1227,38 @@ export default function AnalysisPage() {
                   <PropertyDAList das={das} loading={dasLoading} />
                 )}
               </SidebarSection>
+
+              {/* Encumbrances */}
+              {encumbrances.length > 0 && (
+                <SidebarSection
+                  title="Encumbrances"
+                  icon={
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                      <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                  }
+                  info="Cadastre parcels that overlap this property — easements, roads, watercourses, covenants, and similar interests registered on title."
+                >
+                  {encumbrances.map((enc, i) => {
+                    const colour = ENCUMBRANCE_COLOURS[enc.label] ?? { fill: "#94A3B8", stroke: "#64748B" };
+                    return (
+                      <div key={i} className="px-3 py-2.5 flex items-center gap-2 border-t border-zinc-800 first:border-t-0">
+                        <span
+                          className="w-2.5 h-2.5 rounded-full shrink-0"
+                          style={{ backgroundColor: colour.fill, border: `1.5px solid ${colour.stroke}` }}
+                        />
+                        <span className="text-xs text-zinc-300 flex-1">{enc.label}</span>
+                        {enc.lotplan && (
+                          <span className="text-[10px] text-zinc-500 font-mono">{enc.lotplan}</span>
+                        )}
+                        <span className="text-xs font-medium text-zinc-400 tabular-nums ml-auto pl-2">
+                          {enc.area_sqm < 1 ? "<1" : Math.round(enc.area_sqm).toLocaleString()} m²
+                        </span>
+                      </div>
+                    );
+                  })}
+                </SidebarSection>
+              )}
 
               {/* City Plan (Gold Coast only) */}
               {cityPlan && (
