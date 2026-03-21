@@ -4,6 +4,14 @@
  * Zone codes vary between councils but follow similar patterns.
  * This maps common zone name patterns to human-readable implications.
  * Values are approximate — always verify against the specific council's planning scheme.
+ *
+ * Site cover sources (Gold Coast City Plan Version 13):
+ *   - Low density residential: 50%  — REF-001, Section 6.2.1
+ *   - Medium density residential: 50% (60% for lots < 400m²) — REF-002, Section 6.2.3
+ *   - Rural residential: 25%  — REF-003, Section 6.2.22
+ *   - High density residential: varies by height (30% for >55m) — REF-004, Section 6.2.4
+ *   - Character residential: 50% UNVERIFIED — REF-005, no GC equivalent
+ * See docs/references.csv for full citations.
  */
 
 export type ZoneRules = {
