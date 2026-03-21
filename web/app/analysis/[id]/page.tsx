@@ -1083,8 +1083,8 @@ export default function AnalysisPage() {
 
               {/* Dismissible notice */}
               {showNotice && (
-                <div className="flex items-start gap-2 rounded-lg bg-white/[0.04] border border-white/[0.06] px-3 py-2.5">
-                  <p className="text-[11px] text-zinc-400 leading-relaxed flex-1">
+                <div className="flex items-start gap-2 rounded-lg bg-amber-500/[0.08] border border-amber-500/20 px-3 py-2.5">
+                  <p className="text-[11px] text-amber-300/80 leading-relaxed flex-1">
                     Results are estimates based on satellite imagery and public data — verify with your local council before proceeding.
                   </p>
                   <button
@@ -1167,20 +1167,20 @@ export default function AnalysisPage() {
                 />
                 {/* Zone — show from City Plan if available, otherwise from state-level data */}
                 {cityPlan?.zone ? (
-                  <div className="px-3 py-2.5">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-zinc-600"><CityPlanZoneIcon /></span>
-                      <span className="text-xs text-zinc-400">Zone</span>
+                  <div className="px-3 py-2.5 flex items-start gap-2">
+                    <span className="text-zinc-600 mt-0.5 shrink-0"><CityPlanZoneIcon /></span>
+                    <span className="text-xs text-zinc-400 shrink-0">Zone</span>
+                    <div className="flex-1 flex flex-col items-end">
+                      <ZoneTooltip
+                        zoneName={cityPlan.zone.lvl1_zone}
+                        lgaName={status?.lga_name ?? null}
+                      />
+                      {cityPlan.zone.zone_precinct && (
+                        <p className="text-[10px] text-zinc-500 mt-0.5">
+                          {cityPlan.zone.zone_precinct}
+                        </p>
+                      )}
                     </div>
-                    <ZoneTooltip
-                      zoneName={cityPlan.zone.lvl1_zone}
-                      lgaName={status?.lga_name ?? null}
-                    />
-                    {cityPlan.zone.zone_precinct && (
-                      <p className="text-[10px] text-zinc-500 mt-1.5 pl-0.5">
-                        {cityPlan.zone.zone_precinct}
-                      </p>
-                    )}
                   </div>
                 ) : (
                   <SidebarRow
@@ -1197,38 +1197,11 @@ export default function AnalysisPage() {
                     value={typeInfo.label}
                   />
                 )}
-                <div className="px-3 py-1.5">
-                  {status.cadastre_lot !== 'COMPLEX' && (
-                  <a
-                    href={`https://apps.information.qld.gov.au/data/cadastre/GenerateSmartMap?q=${encodeURIComponent(`${status.cadastre_lot}\\${status.cadastre_plan}`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
-                  >
-                    <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                      <polyline points="15 3 21 3 21 9" />
-                      <line x1="10" y1="14" x2="21" y2="3" />
-                    </svg>
-                    View Smart Map (QLD)
-                  </a>
-                  )}
-                </div>
+                {/* Development Applications (Gold Coast only) */}
+                {das !== null && (
+                  <PropertyDAList das={das} loading={dasLoading} />
+                )}
               </SidebarSection>
-
-              {/* Development Activity (Gold Coast only) */}
-              <DAActivityPanel
-                parcelDAs={das}
-                nearbyDAs={nearbyDAs}
-                nearbyTotal={nearbyDATotal}
-                nearbySummary={nearbyDASummary}
-                nearbyRadius={nearbyDARadius}
-                onNearbyRadiusChange={setNearbyDARadius}
-                showOnMap={showDAsOnMap}
-                onShowOnMapChange={setShowDAsOnMap}
-                loading={dasLoading}
-                nearbyLoading={nearbyDAsLoading}
-              />
 
               {/* City Plan (Gold Coast only) */}
               {cityPlan && (
@@ -1331,7 +1304,25 @@ export default function AnalysisPage() {
                       </SidebarSection>
                     );
                   })()}
+                </>
+              )}
 
+              {/* Development Activity (Gold Coast only) */}
+              <DAActivityPanel
+                parcelDAs={das}
+                nearbyDAs={nearbyDAs}
+                nearbyTotal={nearbyDATotal}
+                nearbySummary={nearbyDASummary}
+                nearbyRadius={nearbyDARadius}
+                onNearbyRadiusChange={setNearbyDARadius}
+                showOnMap={showDAsOnMap}
+                onShowOnMapChange={setShowDAsOnMap}
+                loading={dasLoading}
+                nearbyLoading={nearbyDAsLoading}
+              />
+
+              {cityPlan && (
+                <>
                   {(cityPlan.bushfire_hazard || cityPlan.airport_noise || cityPlan.buffer_area || cityPlan.dwelling_house_overlay || cityPlan.flood || cityPlan.heritage || cityPlan.heritage_proximity || cityPlan.environmental_significance) && (
                     <SidebarSection
                       title="Constraints"
@@ -1834,6 +1825,125 @@ function NavIcon({
   );
 }
 
+// ─── Property DA list (inside Your Property section) ─────────────────────
+
+function PropertyDAList({
+  das,
+  loading,
+}: {
+  das: import("@/app/api/analysis/das/route").DevelopmentApplication[];
+  loading: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-between px-3 py-2.5 gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-600"><DAIcon /></span>
+          <span className="text-xs text-zinc-400">Applications</span>
+        </div>
+        <span className="text-xs text-zinc-600 animate-pulse">loading…</span>
+      </div>
+    );
+  }
+
+  const count = das.length;
+  const activeDAs = das.filter(d => {
+    const s = (d.status ?? "").toLowerCase();
+    return s.includes("current") || s.includes("pending") || s.includes("assessment") || s.includes("lodged");
+  });
+
+  function daShortType(appType: string | null): string {
+    const t = (appType ?? "").toUpperCase().trim();
+    if (t.includes("MATERIAL CHANGE") || t === "MCU") return "MCU";
+    if (t.includes("RECONFIGUR") || t === "ROL") return "ROL";
+    if (t.includes("OPERATIONAL") || t === "OPW") return "OPW";
+    if (t.includes("BUILDING WORK") || t === "BWA" || t === "BA") return "BA";
+    if (t.includes("COMBINED")) return "Combined";
+    return appType ?? "DA";
+  }
+
+  function daStatusStyle(status: string | null): string {
+    const s = (status ?? "").toLowerCase();
+    if (s.includes("approved") || s.includes("decision made")) return "bg-emerald-500/15 text-emerald-400";
+    if (s.includes("refused")) return "bg-red-500/15 text-red-400";
+    if (s.includes("withdrawn") || s.includes("lapsed")) return "bg-zinc-600/30 text-zinc-400";
+    if (s.includes("current") || s.includes("pending") || s.includes("assessment") || s.includes("lodged")) return "bg-amber-500/15 text-amber-400";
+    return "bg-zinc-600/20 text-zinc-400";
+  }
+
+  function formatDate(d: string | null): string {
+    if (!d) return "";
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return "";
+    return dt.toLocaleDateString("en-AU", { month: "short", year: "numeric" });
+  }
+
+  return (
+    <>
+      <div
+        className="flex items-center justify-between px-3 py-2.5 gap-3 cursor-pointer hover:bg-white/[0.02] transition-colors"
+        onClick={() => count > 0 && setExpanded(e => !e)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-zinc-600"><DAIcon /></span>
+          <span className="text-xs text-zinc-400">Applications</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {activeDAs.length > 0 && (
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+          )}
+          <span className={`text-xs font-semibold tabular-nums ${count > 0 ? "text-zinc-300" : "text-zinc-500"}`}>
+            {count === 0 ? "None" : count}
+          </span>
+          {count > 0 && (
+            <svg className={`w-3 h-3 text-zinc-600 transition-transform ${expanded ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          )}
+        </div>
+      </div>
+      {expanded && count > 0 && (
+        <div className="divide-y divide-white/[0.04]">
+          {das.map((da) => (
+            <div key={da.application_number} className="px-3 py-2.5">
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-[10px] font-mono text-zinc-500 flex-shrink-0">{daShortType(da.application_type)}</span>
+                  <span className="text-[10px] text-zinc-500 flex-shrink-0">{da.application_number}</span>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${daStatusStyle(da.status)}`}>
+                  {da.status ?? "Unknown"}
+                </span>
+              </div>
+              {da.description && (
+                <p className="text-[10px] text-zinc-400 leading-relaxed line-clamp-2">{da.description}</p>
+              )}
+              <div className="flex items-center gap-3 mt-1">
+                {da.lodgement_date && (
+                  <span className="text-[10px] text-zinc-600">Lodged {formatDate(da.lodgement_date)}</span>
+                )}
+                {da.decision_date && (
+                  <span className="text-[10px] text-zinc-600">Decided {formatDate(da.decision_date)}</span>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function DAIcon() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+      <path d="M9 12h6M9 16h6M9 8h6M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+    </svg>
+  );
+}
+
 // ─── Sidebar components ───────────────────────────────────────────────────
 
 function SidebarSection({
@@ -1850,8 +1960,8 @@ function SidebarSection({
   return (
     <div>
       <div className="relative group flex items-center gap-2 mb-2">
-        <span className="text-zinc-600">{icon}</span>
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+        <span className="text-zinc-200">{icon}</span>
+        <h3 className="text-xs font-semibold tracking-wide text-zinc-200">
           {title}
         </h3>
         {info && (

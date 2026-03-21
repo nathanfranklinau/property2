@@ -463,37 +463,61 @@ export function DAActivityPanel({
   loading,
   nearbyLoading,
 }: Props) {
-  const [showAll, setShowAll] = useState(false);
   const [nearbyExpanded, setNearbyExpanded] = useState(false);
+  const [filterTypes, setFilterTypes] = useState<string[]>([]);
+  const [filterStatuses, setFilterStatuses] = useState<string[]>([]);
+  const [filterTimeRange, setFilterTimeRange] = useState<"6m" | "1y" | "2y" | "all">("all");
 
-  const isGoldCoast = parcelDAs !== null; // null means non-Gold Coast
-
+  const isGoldCoast = parcelDAs !== null;
   if (!isGoldCoast) return null;
 
-  const totalThisProperty = parcelDAs?.length ?? 0;
-  const displayedDAs = showAll ? (parcelDAs ?? []) : (parcelDAs ?? []).slice(0, 3);
-
-  // Top types for nearby summary (top 4 by count)
-  const topTypes = nearbySummary
-    ? Object.entries(nearbySummary.by_type)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4)
+  // Compute unique types present in nearby DAs for filter chips
+  const availableTypes = nearbyDAs
+    ? Array.from(new Set(nearbyDAs.map((da) => daTypeMeta(da.application_type).shortLabel)))
     : [];
 
+  // Time range cutoff
+  function timeRangeCutoff(range: string): Date | null {
+    const now = new Date();
+    if (range === "6m") return new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    if (range === "1y") return new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+    if (range === "2y") return new Date(now.getFullYear() - 2, now.getMonth(), now.getDate());
+    return null;
+  }
+
+  // Apply filters to nearby DAs
+  const filteredNearbyDAs = (nearbyDAs ?? []).filter((da) => {
+    if (filterTypes.length > 0 && !filterTypes.includes(daTypeMeta(da.application_type).shortLabel)) return false;
+    if (filterStatuses.length > 0 && !filterStatuses.includes(statusBucket(da.status))) return false;
+    if (filterTimeRange !== "all") {
+      const cutoff = timeRangeCutoff(filterTimeRange);
+      if (cutoff && da.lodgement_date && new Date(da.lodgement_date) < cutoff) return false;
+    }
+    return true;
+  });
+
+  const filteredCount = filteredNearbyDAs.length;
+  const hasActiveFilters = filterTypes.length > 0 || filterStatuses.length > 0 || filterTimeRange !== "all";
+
+  function toggleType(label: string) {
+    setFilterTypes((prev) => prev.includes(label) ? prev.filter((t) => t !== label) : [...prev, label]);
+  }
+  function toggleStatus(bucket: string) {
+    setFilterStatuses((prev) => prev.includes(bucket) ? prev.filter((s) => s !== bucket) : [...prev, bucket]);
+  }
+
   return (
-    <div className="border-t border-zinc-800/60">
-      {/* ── Panel header ── */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-zinc-800/60">
-        <div className="flex items-center gap-2">
-          <span className="text-zinc-500">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-              <rect x="9" y="3" width="6" height="4" rx="1" />
-              <path d="M9 12h6M9 16h4" />
-            </svg>
-          </span>
-          <span className="text-xs font-semibold text-zinc-200 tracking-wide">Development Activity</span>
-        </div>
+    <div>
+      {/* ── Panel header — matches SidebarSection layout ── */}
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-zinc-200">
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+            <rect x="9" y="3" width="6" height="4" rx="1" />
+            <path d="M9 12h6M9 16h4" />
+          </svg>
+        </span>
+        <span className="text-xs font-semibold text-zinc-200 tracking-wide flex-1">Development Activity</span>
 
         {/* Map toggle */}
         <button
@@ -512,48 +536,11 @@ export function DAActivityPanel({
           {showOnMap ? "Showing on map" : "Show on map"}
         </button>
       </div>
-
-      {/* ── This Property DAs ── */}
-      <div className="px-3 py-2.5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] font-semibold text-zinc-500 uppercase tracking-widest">This Property</span>
-          {loading && (
-            <span className="text-[9px] text-zinc-600 animate-pulse">Loading…</span>
-          )}
-          {!loading && (
-            <span className={`text-[10px] font-semibold ${totalThisProperty > 0 ? "text-amber-400" : "text-zinc-500"}`}>
-              {totalThisProperty === 0 ? "None on record" : `${totalThisProperty} application${totalThisProperty !== 1 ? "s" : ""}`}
-            </span>
-          )}
-        </div>
-
-        {!loading && totalThisProperty === 0 && (
-          <p className="text-[11px] text-zinc-600 italic">No development applications found for this lot.</p>
-        )}
-
-        {!loading && totalThisProperty > 0 && (
-          <div className="space-y-1.5">
-            {displayedDAs.map((da) => (
-              <DARow key={da.application_number} da={da} />
-            ))}
-            {(parcelDAs?.length ?? 0) > 3 && (
-              <button
-                onClick={() => setShowAll((v) => !v)}
-                className="w-full text-center text-[10px] text-zinc-500 hover:text-zinc-300 py-1 transition-colors"
-              >
-                {showAll
-                  ? "Show less"
-                  : `Show ${(parcelDAs?.length ?? 0) - 3} more`}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02]">
 
       {/* ── Nearby DAs ── */}
-      <div className="border-t border-zinc-800/60 px-3 py-2.5">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] font-semibold text-zinc-500 uppercase tracking-widest">Nearby Activity</span>
+      <div className="px-3 py-2.5">
+        <div className="flex items-center justify-between mb-2.5">
           {/* Radius selector */}
           <div className="flex items-center gap-0.5">
             {RADIUS_OPTIONS.map((opt) => (
@@ -570,6 +557,14 @@ export function DAActivityPanel({
               </button>
             ))}
           </div>
+          {hasActiveFilters && (
+            <button
+              onClick={() => { setFilterTypes([]); setFilterStatuses([]); setFilterTimeRange("all"); }}
+              className="text-[9px] text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
 
         {nearbyLoading && (
@@ -579,44 +574,94 @@ export function DAActivityPanel({
           </div>
         )}
 
-        {!nearbyLoading && nearbyDAs !== null && (
+        {!nearbyLoading && nearbyDAs !== null && nearbyTotal > 0 && (
           <>
+            {/* ── Filters ── */}
+            <div className="space-y-2 mb-3">
+              {/* Time range */}
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Period</span>
+                {(["all", "6m", "1y", "2y"] as const).map((range) => (
+                  <button
+                    key={range}
+                    onClick={() => setFilterTimeRange(range)}
+                    className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+                      filterTimeRange === range
+                        ? "bg-zinc-700 text-zinc-200"
+                        : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
+                    }`}
+                  >
+                    {range === "all" ? "All time" : range === "6m" ? "6 months" : range === "1y" ? "1 year" : "2 years"}
+                  </button>
+                ))}
+              </div>
+
+              {/* Type filter chips with tooltips */}
+              {availableTypes.length > 1 && (
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Type</span>
+                  {availableTypes.map((label) => {
+                    // Find the full meta for tooltip — match by shortLabel
+                    const meta = daTypeMeta(nearbyDAs.find((d) => daTypeMeta(d.application_type).shortLabel === label)?.application_type ?? null);
+                    const active = filterTypes.includes(label);
+                    return (
+                      <div key={label} className="relative group">
+                        <button
+                          onClick={() => toggleType(label)}
+                          className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+                            active
+                              ? `bg-zinc-700 ${meta.color} border border-zinc-600`
+                              : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
+                          }`}
+                        >
+                          <span className={active ? meta.color : "text-zinc-600"}>{meta.icon}</span>
+                          {label}
+                        </button>
+                        <div className="absolute bottom-full left-0 mb-1.5 z-50 hidden group-hover:block w-56 bg-zinc-900 border border-white/10 rounded-lg shadow-xl p-2.5 text-[10px] text-zinc-300 leading-relaxed pointer-events-none">
+                          <p className={`font-semibold mb-1 ${meta.color}`}>{meta.label}</p>
+                          <p className="text-zinc-400">{meta.tooltip}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Status filter */}
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="text-[9px] text-zinc-600 uppercase tracking-wider mr-0.5">Status</span>
+                {(["approved", "current", "refused", "withdrawn"] as const).map((bucket) => {
+                  const active = filterStatuses.includes(bucket);
+                  const label = bucket.charAt(0).toUpperCase() + bucket.slice(1);
+                  return (
+                    <button
+                      key={bucket}
+                      onClick={() => toggleStatus(bucket)}
+                      className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+                        active ? STATUS_STYLES[bucket] : "text-zinc-500 hover:text-zinc-400 border border-zinc-800"
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? STATUS_DOT[bucket] : "bg-zinc-700"}`} />
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Count summary */}
             <div className="flex items-center justify-between mb-2">
-              <span className={`text-[11px] font-semibold ${nearbyTotal > 0 ? "text-zinc-200" : "text-zinc-500"}`}>
-                {nearbyTotal === 0
-                  ? "None found"
-                  : `${nearbyTotal} application${nearbyTotal !== 1 ? "s" : ""} within ${nearbyRadius >= 1000 ? `${nearbyRadius / 1000} km` : `${nearbyRadius}m`}`}
+              <span className={`text-[11px] font-semibold ${filteredCount > 0 ? "text-zinc-200" : "text-zinc-500"}`}>
+                {filteredCount === 0
+                  ? "No matching applications"
+                  : hasActiveFilters
+                    ? `${filteredCount} of ${nearbyTotal} within ${nearbyRadius >= 1000 ? `${nearbyRadius / 1000} km` : `${nearbyRadius}m`}`
+                    : `${nearbyTotal} application${nearbyTotal !== 1 ? "s" : ""} within ${nearbyRadius >= 1000 ? `${nearbyRadius / 1000} km` : `${nearbyRadius}m`}`}
               </span>
             </div>
 
-            {/* Type breakdown chips */}
-            {topTypes.length > 0 && (
-              <div className="flex flex-wrap gap-1 mb-2.5">
-                {topTypes.map(([type, count]) => (
-                  <TypeChip key={type} type={type} count={count} color="" />
-                ))}
-              </div>
-            )}
-
-            {/* Category breakdown */}
-            {nearbySummary && Object.keys(nearbySummary.by_status).length > 0 && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 mb-2">
-                {Object.entries(nearbySummary.by_status)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([status, count]) => {
-                    const bucket = statusBucket(status);
-                    return (
-                      <span key={status} className="flex items-center gap-1 text-[10px] text-zinc-400">
-                        <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[bucket]}`} />
-                        {status} <span className="text-zinc-500">{count}</span>
-                      </span>
-                    );
-                  })}
-              </div>
-            )}
-
             {/* Nearby DA list (collapsed by default) */}
-            {nearbyTotal > 0 && (
+            {filteredCount > 0 && (
               <button
                 onClick={() => setNearbyExpanded((v) => !v)}
                 className="flex items-center gap-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -627,23 +672,28 @@ export function DAActivityPanel({
                 >
                   <polyline points="6 9 12 15 18 9" />
                 </svg>
-                {nearbyExpanded ? "Hide list" : `Browse ${nearbyTotal} applications`}
+                {nearbyExpanded ? "Hide list" : `Browse ${filteredCount} application${filteredCount !== 1 ? "s" : ""}`}
               </button>
             )}
 
-            {nearbyExpanded && nearbyDAs.length > 0 && (
+            {nearbyExpanded && filteredNearbyDAs.length > 0 && (
               <div className="mt-2 space-y-1.5 max-h-80 overflow-y-auto pr-0.5">
-                {nearbyDAs.map((da) => (
+                {filteredNearbyDAs.map((da) => (
                   <NearbyDARow key={da.application_number} da={da} />
                 ))}
               </div>
             )}
           </>
         )}
+
+        {!nearbyLoading && nearbyDAs !== null && nearbyTotal === 0 && (
+          <p className="text-[11px] text-zinc-600 italic">No nearby applications found within {nearbyRadius >= 1000 ? `${nearbyRadius / 1000} km` : `${nearbyRadius}m`}.</p>
+        )}
+
       </div>
 
       {/* ── Data coverage notice ── */}
-      <div className="px-3 pb-2.5">
+      <div className="border-t border-white/[0.04] px-3 py-2.5">
         <div className="flex items-start gap-1.5 text-[10px] text-zinc-600 bg-zinc-800/30 rounded px-2 py-1.5">
           <svg className="w-3 h-3 mt-0.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
             <circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" />
@@ -651,6 +701,7 @@ export function DAActivityPanel({
           <span>Data covers 2017–2019 and 2025–2026. Applications from 2020–2024 are mostly absent.</span>
         </div>
       </div>
+    </div>
     </div>
   );
 }
