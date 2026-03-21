@@ -1,7 +1,33 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* ─── Design Tokens ───────────────────────────────────────────────────────
+   PropertyProfiler Design System v1.0
+   Theme: "Precision Instrument" — deep violet-ink dark, high contrast text.
+   ───────────────────────────────────────────────────────────────────────── */
+
 :root {
+  /* App shells */
+  --pp-bg-app:      #131320;   /* main chrome, nav, tab bar  */
+  --pp-bg-sidebar:  #1a1a2e;   /* right sidebar              */
+  --pp-bg-map-load: #10101e;   /* map skeleton/loading       */
+
+  /* Surfaces (cards, rows) */
+  --pp-surface-1:   rgba(255,255,255,0.025);  /* section card bg            */
+  --pp-surface-2:   rgba(255,255,255,0.04);   /* hover states               */
+
+  /* Borders & dividers */
+  --pp-border:      rgba(255,255,255,0.08);   /* primary border             */
+  --pp-divider:     rgba(255,255,255,0.055);  /* between rows               */
+
+  /* Text */
+  --pp-text-primary:   #ffffff;
+  --pp-text-value:     #e2e2f0;   /* data values — slightly lavender-white  */
+  --pp-text-label:     #a0a0b8;   /* row labels  — higher contrast than before */
+  --pp-text-icon:      #6a6a84;   /* row icons   — visible without competing */
+  --pp-text-muted:     #5a5a72;   /* fine print, placeholders               */
+
+  /* Legacy (light-mode pass-through for non-app pages) */
   --background: #ffffff;
   --foreground: #171717;
 }
@@ -24,4 +50,24 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Sidebar scrollbar ─────────────────────────────────────────────────── */
+.pp-sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+.pp-sidebar-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+.pp-sidebar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pp-sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+}
+.pp-sidebar-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.14);
 }
