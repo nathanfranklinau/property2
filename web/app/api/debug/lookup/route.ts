@@ -60,6 +60,29 @@ async function fetchGoldCoastOverlays(lot: string, plan: string): Promise<Record
   };
 }
 
+async function fetchDevApplications(lot: string, plan: string): Promise<Record<string, unknown>[]> {
+  const lotplan = `${lot}${plan}`;
+  const result = await db.query(
+    `SELECT application_number, description, application_type, lodgement_date, status,
+            suburb, location_address, lot_on_plan, lot_plan,
+            pre_assessment_started, pre_assessment_completed,
+            confirmation_notice_started, confirmation_notice_completed,
+            decision_started, decision_completed,
+            decision_type, decision_date, decision_authority,
+            responsible_officer,
+            decision_approved_started, decision_approved_completed,
+            issue_decision_started, issue_decision_completed,
+            appeal_period_started, appeal_period_completed,
+            workflow_events, documents_summary,
+            first_scraped_at, last_scraped_at, detail_scraped_at
+     FROM goldcoast_dev_applications
+     WHERE lot_plan = $1
+     ORDER BY lodgement_date DESC`,
+    [lotplan]
+  );
+  return result.rows;
+}
+
 async function handleLotPlanLookup(lot: string, plan: string): Promise<NextResponse> {
   const debug: Record<string, unknown> = { input: `${lot}/${plan}`, mode: "lot_plan" };
 
@@ -129,6 +152,13 @@ async function handleLotPlanLookup(lot: string, plan: string): Promise<NextRespo
     }
   } catch (err) {
     debug.error = err instanceof Error ? err.message : String(err);
+  }
+
+  // Dev applications
+  try {
+    debug.devApplications = await fetchDevApplications(lot, plan);
+  } catch (err) {
+    debug.devApplicationsError = err instanceof Error ? err.message : String(err);
   }
 
   // All addresses on this plan
@@ -630,6 +660,16 @@ export async function GET(req: NextRequest) {
     const plan = topLot?.plan as string | undefined;
     if (lot && plan) {
       debug.goldCoast = await fetchGoldCoastOverlays(lot, plan).catch((err) => ({ error: String(err) }));
+    }
+  }
+
+  // ── 8. Dev applications ──────────────────────────────────────────────
+  const topLotForDA = spatialPrimaryRows.find((r) => r.parcel_typ === "Lot Type Parcel") ?? spatialPrimaryRows[0];
+  if (topLotForDA?.lot && topLotForDA?.plan) {
+    try {
+      debug.devApplications = await fetchDevApplications(topLotForDA.lot as string, topLotForDA.plan as string);
+    } catch (err) {
+      debug.devApplicationsError = err instanceof Error ? err.message : String(err);
     }
   }
 
