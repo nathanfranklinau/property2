@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 const PropertyMap = dynamic(() => import("@/components/PropertyMap"), {
   ssr: false,
   loading: () => (
-    <div className="w-full h-full bg-[#0d0d15] animate-pulse" />
+    <div className="w-full h-full bg-[#10101e] animate-pulse" />
   ),
 });
 
@@ -778,7 +778,7 @@ export default function AnalysisPage() {
             <h1 className="text-lg font-semibold text-white mb-1">
               {status.display_address ?? `Lot ${status.cadastre_lot} on ${status.cadastre_plan}`}
             </h1>
-            <p className="text-sm text-zinc-500 mb-8">
+            <p className="text-sm text-zinc-400 mb-8">
               Lot {status.cadastre_lot} on {status.cadastre_plan}
               {status.lot_area_sqm ? ` · ${Math.round(status.lot_area_sqm).toLocaleString()} m²` : ""}
             </p>
@@ -823,7 +823,7 @@ export default function AnalysisPage() {
                           )}
                           {active && <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" />}
                         </span>
-                        <span className={`text-sm ${done ? "text-zinc-600 line-through" : active ? "text-white font-medium" : "text-zinc-600"}`}>
+                        <span className={`text-sm ${done ? "text-zinc-500 line-through" : active ? "text-white font-medium" : "text-zinc-500"}`}>
                           {step.label}
                         </span>
                         {active && <Spinner className="w-4 h-4 text-zinc-500 ml-auto" />}
@@ -842,9 +842,9 @@ export default function AnalysisPage() {
   // ─── Complete state — full dashboard ────────────────────────────────────
 
   return (
-    <div className="h-screen bg-[#111118] text-white flex flex-col overflow-hidden">
+    <div className="h-screen bg-[#131320] text-white flex flex-col overflow-hidden">
       {/* Top navigation bar */}
-      <nav className="flex items-center gap-1 px-3 py-2 border-b border-white/[0.06] bg-[#111118]">
+      <nav className="flex items-center gap-1 px-3 py-2 border-b border-white/[0.08] bg-[#131320]">
         <NavIcon href="/" tooltip="Home">
           <svg className="w-4.5 h-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
             <path d="M3 12l9-8 9 8" />
@@ -920,22 +920,22 @@ export default function AnalysisPage() {
           </div>
 
           {/* Tab bar */}
-          <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-white/[0.06] bg-[#111118] overflow-x-auto">
+          <div className="flex items-center gap-0.5 px-2 py-1.5 border-t border-white/[0.08] bg-[#131320] overflow-x-auto">
             {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
                   activeTab === tab.id
-                    ? "bg-white/[0.08] text-white"
-                    : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"
+                    ? "bg-white/[0.10] text-white"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05]"
                 }`}
               >
                 {tab.icon}
                 {tab.label}
               </button>
             ))}
-            <button className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04] whitespace-nowrap transition-all">
+            <button className="flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05] whitespace-nowrap transition-all">
               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
                 <path d="M5 12h14M12 5l7 7-7 7" />
               </svg>
@@ -945,8 +945,8 @@ export default function AnalysisPage() {
         </div>
 
         {/* Right: Sidebar */}
-        <aside className="w-[380px] flex-shrink-0 border-l border-white/[0.06] bg-[#15151e] flex flex-col">
-          <div className="flex-1 overflow-y-auto">
+        <aside className="w-[380px] flex-shrink-0 border-l border-white/[0.08] bg-[#1a1a2e] flex flex-col">
+          <div className="flex-1 overflow-y-auto pp-sidebar-scroll">
             <div className="p-5 space-y-5">
               {/* Address + property type icon */}
               <div className="flex items-start gap-3">
@@ -957,9 +957,9 @@ export default function AnalysisPage() {
                   <h1 className="text-sm font-semibold text-white leading-tight truncate">
                     {status.display_address ?? `Lot ${status.cadastre_lot} on ${status.cadastre_plan}`}
                   </h1>
-                  <p className="text-xs text-zinc-500 mt-0.5">{typeInfo.label}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">{typeInfo.label}</p>
                   {status.building_name && (
-                    <p className="text-xs text-zinc-500">{status.building_name}</p>
+                    <p className="text-xs text-zinc-400">{status.building_name}</p>
                   )}
                 </div>
               </div>
@@ -1049,29 +1049,29 @@ export default function AnalysisPage() {
               {status.lot_area_sqm != null && (
                 <div className="flex items-end gap-4">
                   <div>
-                    <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Lot Size</p>
+                    <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Lot Size</p>
                     <p className="text-4xl font-bold tracking-tight tabular-nums leading-none">
                       {Math.round(status.lot_area_sqm).toLocaleString()}
-                      <span className="text-lg font-medium text-zinc-400 ml-0.5">m²</span>
+                      <span className="text-lg font-medium text-zinc-300 ml-0.5">m²</span>
                     </p>
                   </div>
                   {freeSpace != null && !isNaN(totalStructuresArea) && (
                     <>
-                      <div className="w-px h-8 bg-white/10 mb-1 flex-shrink-0" />
+                      <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
                       <div>
-                        <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Free</p>
-                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
+                        <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Free</p>
+                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-200">
                           {Math.round(freeSpace).toLocaleString()}
-                          <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
+                          <span className="text-sm font-medium text-zinc-400 ml-0.5">m²</span>
                         </p>
                       </div>
-                      <div className="w-px h-8 bg-white/10 mb-1 flex-shrink-0" />
+                      <div className="w-px h-8 bg-white/[0.12] mb-1 flex-shrink-0" />
                       <div>
-                        <p className="text-[11px] text-zinc-500 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
-                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-300">
+                        <p className="text-[11px] text-zinc-400 mb-0.5 uppercase tracking-wider font-medium">Covered</p>
+                        <p className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-zinc-200">
                           {Math.round(Math.min(totalStructuresArea, status.lot_area_sqm)).toLocaleString()}
-                          <span className="text-sm font-medium text-zinc-500 ml-0.5">m²</span>
-                          <span className="text-xs font-medium text-zinc-600 ml-1.5">
+                          <span className="text-sm font-medium text-zinc-400 ml-0.5">m²</span>
+                          <span className="text-xs font-medium text-zinc-500 ml-1.5">
                             {Math.round((Math.min(totalStructuresArea, status.lot_area_sqm) / status.lot_area_sqm) * 100)}%
                           </span>
                         </p>
@@ -1168,8 +1168,8 @@ export default function AnalysisPage() {
                 {/* Zone — show from City Plan if available, otherwise from state-level data */}
                 {cityPlan?.zone ? (
                   <div className="px-3 py-2.5 flex items-start gap-2">
-                    <span className="text-zinc-600 mt-0.5 shrink-0"><CityPlanZoneIcon /></span>
-                    <span className="text-xs text-zinc-400 shrink-0">Zone</span>
+                    <span className="text-zinc-500 mt-0.5 shrink-0"><CityPlanZoneIcon /></span>
+                    <span className="text-xs text-zinc-300 shrink-0">Zone</span>
                     <div className="flex-1 flex flex-col items-end">
                       <ZoneTooltip
                         zoneName={cityPlan.zone.lvl1_zone}
@@ -1231,8 +1231,8 @@ export default function AnalysisPage() {
                           <div className="px-3 py-2.5">
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
-                                <span className="text-zinc-600"><HeightIcon /></span>
-                                <span className="text-xs text-zinc-400">Max Building Height</span>
+                                <span className="text-zinc-500"><HeightIcon /></span>
+                                <span className="text-xs text-zinc-300">Max Building Height</span>
                               </div>
                               <span className={`text-xs font-bold tabular-nums ${heightColor(cityPlan.building_height.height_in_metres)}`}>
                                 {cityPlan.building_height.height_label || cityPlan.building_height.height_in_metres}
@@ -1320,7 +1320,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-blue-500"><FloodIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Flood Overlay</span>
+                              <span className="text-xs text-zinc-300">Flood Overlay</span>
                               <p className="text-xs font-semibold text-blue-400">Flood assessment required</p>
                               {cityPlan.flood.level && (
                                 <p className="text-[10px] text-blue-400/70 mt-0.5">{cityPlan.flood.level}</p>
@@ -1337,7 +1337,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-amber-600"><HeritageIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Heritage Place</span>
+                              <span className="text-xs text-zinc-300">Heritage Place</span>
                               <p className="text-xs font-semibold text-amber-400">{cityPlan.heritage.place_name}</p>
                               {cityPlan.heritage.qld_heritage_register === "Yes" && (
                                 <p className="text-[10px] text-amber-400/70 mt-0.5">QLD Heritage Register listed</p>
@@ -1354,7 +1354,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-amber-600/70"><HeritageIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Near Heritage Place</span>
+                              <span className="text-xs text-zinc-300">Near Heritage Place</span>
                               <p className="text-[10px] text-amber-400/70 mt-0.5">Adjacent to: {cityPlan.heritage_proximity.place_name}</p>
                             </div>
                           </div>
@@ -1365,7 +1365,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-emerald-500"><EnvironmentalIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Environmental Significance</span>
+                              <span className="text-xs text-zinc-300">Environmental Significance</span>
                               <div className="flex flex-wrap gap-1 mt-1">
                                 {cityPlan.environmental_significance.map((cat) => (
                                   <span key={cat} className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400">
@@ -1382,7 +1382,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className={bushfireIconColor(cityPlan.bushfire_hazard.level)}><FlameIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Bushfire Hazard</span>
+                              <span className="text-xs text-zinc-300">Bushfire Hazard</span>
                               <p className={`text-xs font-semibold ${bushfireTextColor(cityPlan.bushfire_hazard.level)}`}>
                                 {cityPlan.bushfire_hazard.level.replace(" Potential Bushfire Intensity", "")}
                               </p>
@@ -1398,7 +1398,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-amber-500"><PlaneIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Airport Noise</span>
+                              <span className="text-xs text-zinc-300">Airport Noise</span>
                               <p className="text-[10px] text-amber-400/80 mt-0.5">{cityPlan.airport_noise.buffer_source} — ANEF 25+</p>
                             </div>
                           </div>
@@ -1409,7 +1409,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-orange-500"><ShieldIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Buffer Area</span>
+                              <span className="text-xs text-zinc-300">Buffer Area</span>
                               <p className="text-[10px] text-orange-400/80 mt-0.5">Sensitive land use restrictions may apply</p>
                             </div>
                           </div>
@@ -1420,7 +1420,7 @@ export default function AnalysisPage() {
                           <div className="flex items-center gap-2">
                             <span className="text-sky-500"><DwellingOverlayIcon /></span>
                             <div className="flex-1 min-w-0">
-                              <span className="text-xs text-zinc-400">Dwelling House Overlay</span>
+                              <span className="text-xs text-zinc-300">Dwelling House Overlay</span>
                               <p className="text-[10px] text-sky-400/80 mt-0.5">Single dwelling only — unit &amp; dual-occ development requires a DA</p>
                             </div>
                           </div>
@@ -1468,7 +1468,7 @@ export default function AnalysisPage() {
                     </div>
                   ) : nearbyData ? (
                   <>
-                  <div className="px-3 py-2 border-b border-white/[0.04]">
+                  <div className="px-3 py-2 border-b border-white/[0.07]">
                     <div className="relative">
                       <svg className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-zinc-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                         <circle cx="11" cy="11" r="8" />
@@ -1479,7 +1479,7 @@ export default function AnalysisPage() {
                         value={nearbySearch}
                         onChange={(e) => { setNearbySearch(e.target.value); setBandPage({}); }}
                         placeholder="Search addresses…"
-                        className="w-full bg-white/[0.04] border border-white/[0.06] rounded text-[11px] text-zinc-300 placeholder-zinc-600 pl-6 pr-6 py-1.5 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.06] transition-colors"
+                        className="w-full bg-white/[0.04] border border-white/[0.08] rounded text-[11px] text-zinc-300 placeholder-zinc-500 pl-6 pr-6 py-1.5 focus:outline-none focus:border-indigo-500/50 focus:bg-white/[0.06] transition-colors"
                       />
                       {nearbySearch && (
                         <button
@@ -1527,8 +1527,8 @@ export default function AnalysisPage() {
                             className="flex items-center justify-between flex-1 px-3 py-2.5 gap-3 hover:bg-white/[0.02] transition-colors min-w-0"
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-zinc-600 flex-shrink-0"><ActivityIcon /></span>
-                              <span className="text-xs text-zinc-400">{label}</span>
+                              <span className="text-zinc-500 flex-shrink-0"><ActivityIcon /></span>
+                              <span className="text-xs text-zinc-300">{label}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-semibold tabular-nums text-zinc-300">
@@ -1616,7 +1616,7 @@ export default function AnalysisPage() {
                                         )}
                                       </>
                                     )}
-                                    <p className={`text-[10px] mt-0.5 ${isVisible ? "text-indigo-400/60" : "text-zinc-600"}`}>
+                                    <p className={`text-[10px] mt-0.5 ${isVisible ? "text-indigo-400/60" : "text-zinc-500"}`}>
                                       {plan.plan} · {plan.lot_count} lots · {plan.total_area_sqm.toLocaleString()} m² · {(plan.distance_m / 1000).toFixed(1)} km
                                     </p>
                                     {plan.zone_name && (
@@ -1633,7 +1633,7 @@ export default function AnalysisPage() {
                                         }
                                         setFocusedNearbyPlan(plan.centroid);
                                       }}
-                                      className={`p-1 rounded transition-colors ${isVisible ? "text-indigo-400/70 hover:text-indigo-300" : "text-zinc-700 hover:text-zinc-400"}`}
+                                      className={`p-1 rounded transition-colors ${isVisible ? "text-indigo-400/70 hover:text-indigo-300" : "text-zinc-500 hover:text-zinc-300"}`}
                                       title="Locate on map"
                                     >
                                       <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
@@ -1652,7 +1652,7 @@ export default function AnalysisPage() {
                                       className={`p-1 rounded transition-colors ${
                                         isVisible
                                           ? "text-indigo-400 hover:text-indigo-300"
-                                          : "text-zinc-700 hover:text-zinc-500"
+                                          : "text-zinc-500 hover:text-zinc-300"
                                       }`}
                                       title={isVisible ? "Hide on map" : "Show on map"}
                                     >
@@ -1767,8 +1767,8 @@ export default function AnalysisPage() {
 
 function DarkShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="h-screen bg-[#111118] text-white flex flex-col">
-      <nav className="flex items-center px-4 py-3 border-b border-white/[0.06]">
+    <div className="h-screen bg-[#131320] text-white flex flex-col">
+      <nav className="flex items-center px-4 py-3 border-b border-white/[0.08]">
         <Link href="/" className="font-semibold text-white text-sm tracking-tight hover:text-zinc-300 transition-colors">
           PropertyProfiler
         </Link>
@@ -1798,7 +1798,7 @@ function NavIcon({
   const cls = `relative p-2 rounded-lg transition-all ${
     active
       ? "bg-emerald-500/15 text-emerald-400"
-      : "text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.04]"
+      : "text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.05]"
   }`;
 
   const inner = (
@@ -1840,10 +1840,10 @@ function PropertyDAList({
     return (
       <div className="flex items-center justify-between px-3 py-2.5 gap-3">
         <div className="flex items-center gap-2">
-          <span className="text-zinc-600"><DAIcon /></span>
-          <span className="text-xs text-zinc-400">Applications</span>
+          <span className="text-zinc-500"><DAIcon /></span>
+          <span className="text-xs text-zinc-300">Applications</span>
         </div>
-        <span className="text-xs text-zinc-600 animate-pulse">loading…</span>
+        <span className="text-xs text-zinc-500 animate-pulse">loading…</span>
       </div>
     );
   }
@@ -1887,8 +1887,8 @@ function PropertyDAList({
         onClick={() => count > 0 && setExpanded(e => !e)}
       >
         <div className="flex items-center gap-2">
-          <span className="text-zinc-600"><DAIcon /></span>
-          <span className="text-xs text-zinc-400">Applications</span>
+          <span className="text-zinc-500"><DAIcon /></span>
+          <span className="text-xs text-zinc-300">Applications</span>
         </div>
         <div className="flex items-center gap-1.5">
           {activeDAs.length > 0 && (
@@ -1960,7 +1960,7 @@ function SidebarSection({
   return (
     <div>
       <div className="relative group flex items-center gap-2 mb-2">
-        <span className="text-zinc-200">{icon}</span>
+        <span className="text-zinc-300">{icon}</span>
         <h3 className="text-xs font-semibold tracking-wide text-zinc-200">
           {title}
         </h3>
@@ -1975,7 +1975,7 @@ function SidebarSection({
           </>
         )}
       </div>
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] divide-y divide-white/[0.04]">
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] divide-y divide-white/[0.055]">
         {children}
       </div>
     </div>
@@ -2000,8 +2000,8 @@ function SidebarRow({
   return (
     <div className="flex items-center justify-between px-3 py-2.5 gap-3">
       <div className="relative group flex items-center gap-2 min-w-0">
-        <span className="text-zinc-600 flex-shrink-0">{icon}</span>
-        <span className="text-xs text-zinc-400 truncate">{label}</span>
+        <span className="text-zinc-500 flex-shrink-0">{icon}</span>
+        <span className="text-xs text-zinc-300 truncate">{label}</span>
         {tooltip && (
           <>
             <button className="w-3.5 h-3.5 rounded-full border border-zinc-700 text-zinc-600 hover:text-zinc-400 hover:border-zinc-500 transition-colors flex items-center justify-center text-[9px] leading-none flex-shrink-0">
