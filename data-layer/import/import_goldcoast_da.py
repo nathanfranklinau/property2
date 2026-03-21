@@ -51,6 +51,7 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
 import psycopg2
@@ -74,6 +75,12 @@ DEFAULT_DELAY = 1.5  # seconds between page navigations
 
 # Delay between pages — overridden by --delay flag
 DELAY = DEFAULT_DELAY
+
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
 
 # EnquiryListId for "Development applications after July 2017" on Gold Coast.
 # Present in all detail page URLs:  EnquiryDetailView.aspx?Id=XXX&EnquiryListId=102
@@ -963,15 +970,117 @@ def fill_app_number_and_search(page: Page, app_num: str) -> bool:
     return True
 
 
-def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None:
-    """Visit detail pages for applications that haven't been enriched yet.
+def _enrich_chunk(worker_id: int, rows: list, args) -> None:
+    """Enrich a partition of rows in a fully isolated browser + DB session.
 
-    Uses the Application number search tab to look up each application by
-    its application number, then clicks through to the detail page.
+    Each worker owns its own Playwright browser context and psycopg2
+    connection.  Rows are pre-partitioned by the caller so there is no
+    overlap between workers — no two workers ever write to the same row.
     """
+    prefix = f"[W{worker_id}]"
+    total = len(rows)
+    conn = get_connection()
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not getattr(args, "headed", True))
+        context = browser.new_context(user_agent=USER_AGENT)
+        page = context.new_page()
+        page.set_default_timeout(30000)
+
+        try:
+            setup_session(page)
+            search_page_url = page.url
+            log.info(f"{prefix} Session ready — {total} records to process")
+
+            consecutive_errors = 0
+
+            for i, (app_num, app_type) in enumerate(rows, 1):
+                try:
+                    log.info(f"{prefix} [{i}/{total}] {app_num}")
+
+                    page.goto(search_page_url, wait_until="networkidle", timeout=30000)
+                    time.sleep(DELAY)
+
+                    if "EnquirySearch.aspx" not in page.url:
+                        log.warning(f"{prefix}   Session expired — re-establishing")
+                        setup_session(page)
+                        search_page_url = page.url
+
+                    if not click_app_number_tab(page):
+                        log.warning(f"{prefix}   Tab not found — skipping {app_num}")
+                        consecutive_errors += 1
+                        continue
+
+                    if not fill_app_number_and_search(page, app_num):
+                        log.warning(f"{prefix}   Search failed — skipping {app_num}")
+                        consecutive_errors += 1
+                        continue
+
+                    link = page.locator(f"a:has-text('{app_num}')")
+                    if link.count() == 0:
+                        log.warning(f"{prefix}   No result link for {app_num} — skipping")
+                        upsert_detail(conn, app_num, {})
+                        consecutive_errors += 1
+                        continue
+
+                    link.first.click()
+                    page.wait_for_load_state("networkidle")
+                    time.sleep(DELAY)
+
+                    if is_error_page(page):
+                        log.warning(f"{prefix}   Error page — skipping {app_num}")
+                        upsert_detail(conn, app_num, {})
+                        consecutive_errors += 1
+                        continue
+
+                    consecutive_errors = 0
+
+                    raw = page.evaluate(JS_EXTRACT_DETAIL)
+
+                    if getattr(args, "debug", False) and i == 1:
+                        log.info(f"{prefix} DEBUG raw:\n" + json.dumps(raw, indent=2))
+
+                    detail = extract_detail_data(raw)
+                    parsed = parse_description(detail.get("description"), app_type)
+                    detail.update(parsed)
+
+                    upsert_detail(conn, app_num, detail)
+                    log.info(f"{prefix}   Updated {len(detail)} fields")
+
+                except Exception as e:
+                    log.error(f"{prefix}   Error on {app_num}: {e}")
+                    consecutive_errors += 1
+                    if consecutive_errors >= 3:
+                        log.warning(f"{prefix}   3 consecutive errors — re-establishing session")
+                        try:
+                            setup_session(page)
+                            search_page_url = page.url
+                            consecutive_errors = 0
+                        except Exception as se:
+                            log.error(f"{prefix}   Could not re-establish session: {se}")
+                    try:
+                        upsert_detail(conn, app_num, {})
+                    except Exception:
+                        pass
+                    continue
+
+            log.info(f"{prefix} Enrichment complete")
+        finally:
+            browser.close()
+            conn.close()
+
+
+def run_enrich(conn, limit, include_closed=False, args=None) -> None:
+    """Fetch unenriched rows then dispatch to N parallel worker sessions.
+
+    Each worker (_enrich_chunk) owns its own browser context and DB
+    connection.  Rows are partitioned by interleaving so each application
+    number appears in exactly one worker's list — no data spillover.
+    """
+    workers = max(1, getattr(args, "workers", 2))
     cur = conn.cursor()
 
-    # --app overrides all filters — always re-enrich that one record
+    # --app overrides all filters — single record, no parallelism needed
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
@@ -980,114 +1089,54 @@ def run_enrich(page: Page, conn, limit, include_closed=False, args=None) -> None
             (target_app,),
         )
         row = cur.fetchone()
+        cur.close()
         if not row:
             log.error(f"Application '{target_app}' not found in database")
             return
-        rows = [(row[0], row[1])]
+        _enrich_chunk(0, [(row[0], row[1])], args)
+        return
+
+    conditions = ["detail_scraped_at IS NULL"]
+    if not include_closed:
+        conditions.append("monitoring_status = 'active'")
+
+    sql = f"""
+        SELECT application_number, application_type
+        FROM goldcoast_dev_applications
+        WHERE {' AND '.join(conditions)}
+        ORDER BY lodgement_date DESC NULLS LAST
+    """
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    cur.execute(sql)
+    rows = [(r[0], r[1]) for r in cur.fetchall()]
+    cur.close()
+
+    log.info(f"{len(rows)} applications to enrich across {workers} worker(s)")
+
+    if not rows:
+        return
+
+    # Interleave-partition: worker i gets rows[i], rows[i+N], rows[i+2N], ...
+    # This distributes the lodgement_date range evenly across workers.
+    chunks = [rows[i::workers] for i in range(workers)]
+    chunks = [c for c in chunks if c]  # drop empty chunks for small queues
+
+    if len(chunks) == 1:
+        _enrich_chunk(0, chunks[0], args)
     else:
-        conditions = ["detail_scraped_at IS NULL"]
-        if not include_closed:
-            conditions.append("monitoring_status = 'active'")
-
-        sql = f"""
-            SELECT application_number, application_type
-            FROM goldcoast_dev_applications
-            WHERE {' AND '.join(conditions)}
-            ORDER BY lodgement_date DESC NULLS LAST
-        """
-        if limit:
-            sql += f" LIMIT {int(limit)}"
-
-        cur.execute(sql)
-        rows = [(r[0], r[1]) for r in cur.fetchall()]
-
-    log.info(f"{len(rows)} applications to enrich")
-
-    setup_session(page)
-    search_page_url = page.url
-    log.info(f"Search page URL: {search_page_url}")
-
-    consecutive_errors = 0
-
-    for i, (app_num, app_type) in enumerate(rows, 1):
-        try:
-            log.info(f"[{i}/{len(rows)}] {app_num}")
-
-            # Navigate back to search page for each application
-            page.goto(search_page_url, wait_until="networkidle", timeout=30000)
-            time.sleep(DELAY)
-
-            # If session expired we'll have been redirected away from the search page
-            if "EnquirySearch.aspx" not in page.url:
-                log.warning("  Redirected away from search page — re-establishing session")
-                setup_session(page)
-                search_page_url = page.url
-
-            # Click Application number search tab
-            if not click_app_number_tab(page):
-                log.warning(f"  Application number tab not found — skipping")
-                consecutive_errors += 1
-                continue
-
-            # Fill app number and search
-            if not fill_app_number_and_search(page, app_num):
-                log.warning(f"  Search failed — skipping")
-                consecutive_errors += 1
-                continue
-
-            # Click on the application number link in results
-            link = page.locator(f"a:has-text('{app_num}')")
-            if link.count() == 0:
-                log.warning(f"  No result link found for {app_num} — skipping")
-                upsert_detail(conn, app_num, {})
-                consecutive_errors += 1
-                continue
-
-            link.first.click()
-            page.wait_for_load_state("networkidle")
-            time.sleep(DELAY)
-
-            if is_error_page(page):
-                log.warning(f"  Error page on detail — skipping")
-                upsert_detail(conn, app_num, {})
-                consecutive_errors += 1
-                continue
-
-            consecutive_errors = 0
-
-            raw = page.evaluate(JS_EXTRACT_DETAIL)
-
-            # In debug mode, dump the raw extraction for the first record
-            if getattr(args, "debug", False) and i == 1:
-                log.info("DEBUG raw extraction:\n" + json.dumps(raw, indent=2))
-
-            detail = extract_detail_data(raw)
-
-            # Parse description into structured category fields
-            parsed = parse_description(detail.get("description"), app_type)
-            detail.update(parsed)
-
-            upsert_detail(conn, app_num, detail)
-            log.info(f"  Updated with {len(detail)} fields: {list(detail.keys())}")
-
-        except Exception as e:
-            log.error(f"  Error enriching {app_num}: {e}")
-            consecutive_errors += 1
-            if consecutive_errors >= 3:
-                log.warning("  3 consecutive errors — re-establishing session")
+        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+            futures = {
+                executor.submit(_enrich_chunk, i, chunk, args): i
+                for i, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                worker_id = futures[future]
                 try:
-                    setup_session(page)
-                    search_page_url = page.url
-                    consecutive_errors = 0
-                except Exception as se:
-                    log.error(f"  Could not re-establish session: {se}")
-            try:
-                upsert_detail(conn, app_num, {})
-            except Exception:
-                pass
-            continue
-
-    log.info("Enrichment complete")
+                    future.result()
+                except Exception as e:
+                    log.error(f"Worker {worker_id} raised unhandled exception: {e}")
 
 
 def run_monitor(page: Page, conn, limit) -> None:
@@ -1221,6 +1270,8 @@ def main():
                         help="Include closed/terminal-status apps (--enrich only)")
     parser.add_argument("--app", type=str, metavar="APP_NUMBER",
                         help="Enrich a specific application number (bypasses all filters)")
+    parser.add_argument("--workers", type=int, default=2,
+                        help="Parallel browser sessions for --enrich (default 2)")
     parser.add_argument("--debug", action="store_true",
                         help="Dump raw JS extraction for first record (--enrich)")
 
@@ -1237,28 +1288,25 @@ def main():
     conn = get_connection()
     log.info("Connected to database")
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=not args.headed)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        )
-        page = context.new_page()
-        page.set_default_timeout(30000)
-
-        try:
-            if args.enrich:
-                run_enrich(page, conn, args.limit, include_closed=args.include_closed, args=args)
-            elif args.monitor:
-                run_monitor(page, conn, args.limit)
-            else:
-                run_scrape(page, conn, args)
-        finally:
-            browser.close()
-            conn.close()
+    try:
+        if args.enrich:
+            # run_enrich manages its own browser sessions per worker
+            run_enrich(conn, args.limit, include_closed=args.include_closed, args=args)
+        else:
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=not args.headed)
+                context = browser.new_context(user_agent=USER_AGENT)
+                page = context.new_page()
+                page.set_default_timeout(30000)
+                try:
+                    if args.monitor:
+                        run_monitor(page, conn, args.limit)
+                    else:
+                        run_scrape(page, conn, args)
+                finally:
+                    browser.close()
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
