@@ -759,6 +759,20 @@ def extract_detail_data(raw: dict) -> dict:
 
 # ── Database operations ──────────────────────────────────────────────────────
 
+def lookup_suburb_from_cadastre(conn, lot_plan: str) -> str | None:
+    """Return the locality (suburb) for a lot/plan from qld_cadastre_address."""
+    if not lot_plan:
+        return None
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT locality FROM qld_cadastre_address WHERE lotplan = %s LIMIT 1",
+        (lot_plan,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    return row[0] if row else None
+
+
 def _monitoring_status_for(status: str | None) -> str:
     return "closed" if is_terminal(status) else "active"
 
@@ -785,9 +799,9 @@ def upsert_summary(conn, records: list) -> int:
             description      = COALESCE(EXCLUDED.description, goldcoast_dev_applications.description),
             application_type = COALESCE(EXCLUDED.application_type, goldcoast_dev_applications.application_type),
             lodgement_date   = COALESCE(EXCLUDED.lodgement_date, goldcoast_dev_applications.lodgement_date),
-            status           = COALESCE(EXCLUDED.status, goldcoast_dev_applications.status),
-            suburb           = COALESCE(EXCLUDED.suburb, goldcoast_dev_applications.suburb),
-            location_address = COALESCE(EXCLUDED.location_address, goldcoast_dev_applications.location_address),
+            status           = EXCLUDED.status,
+            suburb           = EXCLUDED.suburb,
+            location_address = EXCLUDED.location_address,
             epathway_id      = COALESCE(EXCLUDED.epathway_id, goldcoast_dev_applications.epathway_id),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
@@ -1043,6 +1057,14 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                     detail = extract_detail_data(raw)
                     parsed = parse_description(detail.get("description"), app_type)
                     detail.update(parsed)
+
+                    # Authoritative suburb from cadastre (overrides scraped suburb)
+                    # Mirrors the lot_plan generated column: strip "Lot " prefix + spaces
+                    lot_plan = re.sub(r"(?i)^\s*lot\s+", "", detail.get("lot_on_plan", "") or "").replace(" ", "")
+                    if lot_plan:
+                        cadastre_suburb = lookup_suburb_from_cadastre(conn, lot_plan)
+                        if cadastre_suburb:
+                            detail["suburb"] = cadastre_suburb
 
                     upsert_detail(conn, app_num, detail)
                     log.info(f"{prefix}   Updated {len(detail)} fields")
