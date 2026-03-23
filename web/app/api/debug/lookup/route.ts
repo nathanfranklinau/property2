@@ -117,21 +117,25 @@ async function fetchEncumbrances(lot: string, plan: string): Promise<{ rows: Rec
 
 async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: Record<string, unknown>[]; query: string }> {
   const lotplan = `${lot}${plan}`;
-  const sql = `SELECT application_number, description, application_type, lodgement_date, status,
-            suburb, location_address, lot_on_plan, lot_plan, cadastre_lotplan,
-            pre_assessment_started, pre_assessment_completed,
-            confirmation_notice_started, confirmation_notice_completed,
-            decision_started, decision_completed,
-            decision_type, decision_date, decision_authority,
-            responsible_officer,
-            decision_approved_started, decision_approved_completed,
-            issue_decision_started, issue_decision_completed,
-            appeal_period_started, appeal_period_completed,
-            workflow_events, documents_summary,
-            first_scraped_at, last_scraped_at, detail_scraped_at
-     FROM goldcoast_dev_applications
-     WHERE lot_plan = $1 OR cadastre_lotplan = $1
-     ORDER BY lodgement_date DESC`;
+  const sql = `SELECT da.application_number, da.description, da.application_type, da.lodgement_date, da.status,
+            da.suburb, da.location_address,
+            da.pre_assessment_started, da.pre_assessment_completed,
+            da.confirmation_notice_started, da.confirmation_notice_completed,
+            da.decision_started, da.decision_completed,
+            da.decision_type, da.decision_date, da.decision_authority,
+            da.responsible_officer,
+            da.decision_approved_started, da.decision_approved_completed,
+            da.issue_decision_started, da.issue_decision_completed,
+            da.appeal_period_started, da.appeal_period_completed,
+            da.workflow_events, da.documents_summary,
+            da.first_scraped_at, da.last_scraped_at, da.detail_scraped_at,
+            dp.lot_on_plan, dp.cadastre_lotplan, dp.is_primary,
+            dp.cadastre_suburb, dp.street_number, dp.street_name, dp.street_type,
+            dp.unit_type, dp.unit_number
+     FROM goldcoast_dev_applications da
+     JOIN goldcoast_da_properties dp ON dp.application_number = da.application_number
+     WHERE dp.cadastre_lotplan = $1
+     ORDER BY da.lodgement_date DESC`;
   const result = await db.query(sql, [lotplan]);
   return { rows: result.rows, query: sql };
 }
