@@ -68,3 +68,4 @@ See [data-layer/.env](data-layer/.env) and [web/.env.local](web/.env.local). Tem
 @docs/rules/simplicity.md
 @docs/rules/nextjs.md
 @docs/rules/tools.md
+@docs/rules/verification.md
