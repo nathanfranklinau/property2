@@ -801,6 +801,132 @@ def resolve_cadastre_lotplan(conn, lot_plan: str) -> str | None:
     return row[0] if row else None
 
 
+_STREET_TYPES = {
+    "ALLEY", "APPROACH", "ARCADE", "AVENUE", "BOULEVARD", "BRACE",
+    "BYPASS", "CAUSEWAY", "CIRCUIT", "CIRCUS", "CLOSE", "CONCOURSE",
+    "CORNER", "COURT", "COVE", "CRESCENT", "CREST", "DRIVE",
+    "ESPLANADE", "FAIRWAY", "FREEWAY", "FRONTAGE", "GLADE", "GLEN",
+    "GROVE", "GULLY", "HEIGHTS", "HIGHWAY", "ISLAND", "JUNCTION",
+    "LANE", "LINK", "LOOP", "MEWS", "MOTORWAY", "NOOK", "OUTLOOK",
+    "PARADE", "PARKWAY", "PASS", "PATHWAY", "PLACE", "PLAZA",
+    "PROMENADE", "RAMBLE", "RETREAT", "RIDGE", "RISE", "ROAD",
+    "ROUTE", "ROW", "RUN", "SQUARE", "STREET", "STRIP", "TERRACE",
+    "TRACK", "TRAIL", "VALE", "VIEW", "VISTA", "WALK", "WAY", "WHARF",
+}
+
+# Plan code pattern: 2–4 letters followed by digits (RP4775, SP289809, GTP103559)
+_RE_PLAN_CODE = re.compile(r"^[A-Z]{2,4}\d+$", re.IGNORECASE)
+
+# Unit prefix: "UNIT 4, " / "SHOP 3A, " / "FLAT 2, "
+_RE_UNIT_PREFIX = re.compile(
+    r"^(UNIT|SHOP|FLAT|SUITE|VILLA|APT|APARTMENT)\s+(\d+\w*)\s*,\s*",
+    re.IGNORECASE,
+)
+
+# Trailing suburb / state / postcode: ", HOPE ISLAND QLD 4212" etc.
+_RE_SUBURB_SUFFIX = re.compile(
+    r",?\s+[A-Z][A-Z ]+\s+(?:QLD|NSW|VIC|SA|WA|TAS|ACT|NT)\s+\d{4}\s*$"
+    r"|,?\s+(?:QLD|NSW|VIC|SA|WA|TAS|ACT|NT)\s+\d{4}\s*$"
+    r"|,?\s+\d{4}\s*$",
+)
+
+
+def parse_location_address(addr: str | None) -> dict:
+    """Parse a free-text location address into structured fields.
+
+    Handles formats seen in ePathway Property section rows:
+      "2 River Terrace"
+      "1A Bakers Ridge Drive"
+      "2-12 Coomera Grand Drive"
+      "UNIT 4, 19 Santa Barbara Road"
+      "Lot 47 Shipper Drive"          ← lot number IS the street number
+      "Lot 303 SP289809"              ← bare lot ref, nothing parseable
+
+    Returns dict with keys: unit_type, unit_number, unit_suffix,
+                            street_number, street_name, street_type.
+    All values are str or None.
+    """
+    out = {
+        "unit_type": None, "unit_number": None, "unit_suffix": None,
+        "street_number": None, "street_name": None, "street_type": None,
+    }
+    if not addr:
+        return out
+
+    text = addr.strip()
+
+    # --- Unit prefix ---
+    m = _RE_UNIT_PREFIX.match(text)
+    if m:
+        out["unit_type"] = m.group(1).upper()
+        out["unit_number"] = m.group(2)
+        text = text[m.end():]
+
+    # --- "Lot N ..." prefix ---
+    lot_match = re.match(r"^Lot\s+(\S+)\s+(.*)", text, re.IGNORECASE)
+    if lot_match:
+        lot_num = lot_match.group(1)
+        rest = lot_match.group(2).strip()
+        # If the next token looks like a plan code → bare lot ref, bail out
+        first_token = rest.split()[0] if rest else ""
+        if _RE_PLAN_CODE.match(first_token):
+            return out
+        # Otherwise the lot number IS the street number
+        text = f"{lot_num} {rest}"
+
+    # --- Strip trailing suburb / state / postcode ---
+    text = _RE_SUBURB_SUFFIX.sub("", text).strip()
+
+    # --- Street number ---
+    num_match = re.match(r"^(\d+\w*(?:-\d+\w*)?)\s+(.+)$", text)
+    if not num_match:
+        return out
+
+    out["street_number"] = num_match.group(1)
+    remainder = num_match.group(2).strip()
+
+    # --- Street name + type ---
+    words = remainder.split()
+    # Find the last word that is a known street type
+    type_idx = next(
+        (i for i in range(len(words) - 1, -1, -1) if words[i].upper() in _STREET_TYPES),
+        None,
+    )
+    if type_idx is not None:
+        out["street_type"] = words[type_idx].title()
+        if type_idx > 0:
+            out["street_name"] = " ".join(w.title() for w in words[:type_idx])
+    else:
+        # No recognised type — last word as type, rest as name
+        out["street_type"] = words[-1].title() if words else None
+        if len(words) > 1:
+            out["street_name"] = " ".join(w.title() for w in words[:-1])
+
+    return out
+
+
+def _lookup_cadastre_suburb(cur, cadastre_lp: str) -> str | None:
+    """Return the locality for a resolved cadastre lotplan.
+
+    Tries qld_cadastre_address first (has address rows for individual lots),
+    falls back to qld_cadastre_parcels (has locality for all parcel types
+    including common property Lot 0).
+    """
+    cur.execute(
+        "SELECT locality FROM qld_cadastre_address WHERE lotplan = %s LIMIT 1",
+        (cadastre_lp,),
+    )
+    row = cur.fetchone()
+    if row and row[0]:
+        return row[0]
+    cur.execute(
+        "SELECT locality FROM qld_cadastre_parcels WHERE lotplan = %s LIMIT 1",
+        (cadastre_lp,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def _monitoring_status_for(status: str | None) -> str:
     return "closed" if is_terminal(status) else "active"
 
@@ -851,25 +977,11 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
         lot_plan_clean = re.sub(r"(?i)^\s*lot\s+", "", lot_raw).replace(" ", "")
         cadastre_lp = resolve_cadastre_lotplan(conn, lot_plan_clean) if lot_plan_clean else None
 
-        # Look up parsed address fields from qld_cadastre_address
-        cadastre_suburb = None
-        street_number = street_name = street_type = None
-        unit_type = unit_number = unit_suffix = None
-        if cadastre_lp:
-            cur.execute(
-                """
-                SELECT locality, street_number, street_name, street_type,
-                       unit_type, unit_number, unit_suffix
-                FROM qld_cadastre_address
-                WHERE lotplan = %s
-                LIMIT 1
-                """,
-                (cadastre_lp,),
-            )
-            addr_row = cur.fetchone()
-            if addr_row:
-                (cadastre_suburb, street_number, street_name, street_type,
-                 unit_type, unit_number, unit_suffix) = addr_row
+        # Cadastre suburb — authoritative locality from the resolved lot
+        cadastre_suburb = _lookup_cadastre_suburb(cur, cadastre_lp) if cadastre_lp else None
+
+        # Parsed address fields — parsed from location_address text, not from cadastre
+        parsed = parse_location_address(address_raw)
 
         final_suburb = cadastre_suburb or suburb_raw or None
 
@@ -890,12 +1002,12 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
                 cadastre_lp,
                 is_primary,
                 cadastre_suburb,
-                street_number,
-                street_name,
-                street_type,
-                unit_type or None,
-                unit_number or None,
-                unit_suffix or None,
+                parsed["street_number"],
+                parsed["street_name"],
+                parsed["street_type"],
+                parsed["unit_type"],
+                parsed["unit_number"],
+                parsed["unit_suffix"],
             ),
         )
 
