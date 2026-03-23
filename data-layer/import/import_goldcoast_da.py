@@ -660,33 +660,13 @@ def extract_detail_data(raw: dict) -> dict:
                 out["responsible_officer"] = val
                 break
 
-    # --- Location / Lot on Plan ---
-    if locations:
-        loc = locations[0]
-        addr = (
-            loc.get("property address")
-            or loc.get("address")
-            or loc.get("location address")
-            or loc.get("formatted property address")
-        )
-        if addr:
-            out["location_address"] = addr.strip()
-
-        lot = loc.get("lot on plan") or loc.get("title") or loc.get("lot/plan")
-        if lot:
-            out["lot_on_plan"] = lot.strip()
-
-        suburb = loc.get("location suburb") or loc.get("suburb")
-        if suburb:
-            out["suburb"] = suburb.strip()
-
-    # Field-based fallbacks for location (keyed from the span/td extraction)
+    # --- Location address (from the Details section fields, not the Property table) ---
     for key in ("application location", "location address"):
         if key in fields and "location_address" not in out:
             out["location_address"] = fields[key]
-    for key in ("lot on plan", "lot/plan", "title"):
-        if key in fields and "lot_on_plan" not in out:
-            out["lot_on_plan"] = fields[key]
+
+    # --- All property rows (passed to upsert_da_properties separately) ---
+    out["raw_properties"] = locations
 
     # --- Workflow events (all rows stored as JSONB) ---
     if milestones:
@@ -825,6 +805,109 @@ def _monitoring_status_for(status: str | None) -> str:
     return "closed" if is_terminal(status) else "active"
 
 
+def upsert_da_properties(conn, application_number: str, locations: list) -> tuple:
+    """Upsert all property rows from the ePathway Property section into
+    goldcoast_da_properties.
+
+    Resolves cadastre_lotplan for each row and determines is_primary (the row
+    that has a real street address, not just a bare lot reference).
+
+    Returns (primary_cadastre_lotplan, primary_suburb) for updating the parent.
+    """
+    if not locations:
+        return None, None
+
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM goldcoast_da_properties WHERE application_number = %s",
+        (application_number,),
+    )
+
+    primary_cadastre = None
+    primary_suburb = None
+
+    for loc in locations:
+        lot_raw = (
+            loc.get("lot on plan") or loc.get("title") or loc.get("lot/plan") or ""
+        ).strip()
+        suburb_raw = (loc.get("location suburb") or loc.get("suburb") or "").strip()
+        address_raw = (
+            loc.get("property address")
+            or loc.get("address")
+            or loc.get("location address")
+            or loc.get("formatted property address")
+            or ""
+        ).strip()
+
+        # Primary = has a real street address (contains comma or doesn't start with "Lot ")
+        is_primary = bool(
+            address_raw and (
+                "," in address_raw
+                or not address_raw.upper().startswith("LOT ")
+            )
+        )
+
+        # Resolve cadastre_lotplan for this specific lot
+        lot_plan_clean = re.sub(r"(?i)^\s*lot\s+", "", lot_raw).replace(" ", "")
+        cadastre_lp = resolve_cadastre_lotplan(conn, lot_plan_clean) if lot_plan_clean else None
+
+        # Look up parsed address fields from qld_cadastre_address
+        cadastre_suburb = None
+        street_number = street_name = street_type = None
+        unit_type = unit_number = unit_suffix = None
+        if cadastre_lp:
+            cur.execute(
+                """
+                SELECT locality, street_number, street_name, street_type,
+                       unit_type, unit_number, unit_suffix
+                FROM qld_cadastre_address
+                WHERE lotplan = %s
+                LIMIT 1
+                """,
+                (cadastre_lp,),
+            )
+            addr_row = cur.fetchone()
+            if addr_row:
+                (cadastre_suburb, street_number, street_name, street_type,
+                 unit_type, unit_number, unit_suffix) = addr_row
+
+        final_suburb = cadastre_suburb or suburb_raw or None
+
+        cur.execute(
+            """
+            INSERT INTO goldcoast_da_properties
+                (application_number, lot_on_plan, suburb, location_address,
+                 cadastre_lotplan, is_primary,
+                 cadastre_suburb, street_number, street_name, street_type,
+                 unit_type, unit_number, unit_suffix)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                application_number,
+                lot_raw or None,
+                final_suburb,
+                address_raw or None,
+                cadastre_lp,
+                is_primary,
+                cadastre_suburb,
+                street_number,
+                street_name,
+                street_type,
+                unit_type or None,
+                unit_number or None,
+                unit_suffix or None,
+            ),
+        )
+
+        if is_primary and primary_cadastre is None:
+            primary_cadastre = cadastre_lp
+            primary_suburb = final_suburb
+
+    conn.commit()
+    cur.close()
+    return primary_cadastre, primary_suburb
+
+
 def upsert_summary(conn, records: list) -> int:
     """INSERT … ON CONFLICT UPDATE for summary-level data.
 
@@ -897,7 +980,7 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
 
     detail_columns = [
         "description",
-        "location_address", "lot_on_plan", "suburb",
+        "location_address", "suburb",
         "responsible_officer",
         "workflow_events",
         "pre_assessment_started", "pre_assessment_completed",
@@ -911,7 +994,6 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         "status", "monitoring_status",
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to", "assessment_level",
-        "cadastre_lotplan",
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
@@ -1107,16 +1189,18 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                     parsed = parse_description(detail.get("description"), app_type)
                     detail.update(parsed)
 
-                    # Authoritative suburb + cadastre_lotplan resolution
-                    # Mirrors the lot_plan generated column: strip "Lot " prefix + spaces
-                    lot_plan = re.sub(r"(?i)^\s*lot\s+", "", detail.get("lot_on_plan", "") or "").replace(" ", "")
-                    if lot_plan:
-                        cadastre_suburb = lookup_suburb_from_cadastre(conn, lot_plan)
-                        if cadastre_suburb:
-                            detail["suburb"] = cadastre_suburb
-                        cadastre_lotplan = resolve_cadastre_lotplan(conn, lot_plan)
-                        if cadastre_lotplan is not None:
-                            detail["cadastre_lotplan"] = cadastre_lotplan
+                    # Upsert all property rows into the child table; get back the
+                    # primary property's cadastre suburb to update the parent record.
+                    raw_properties = detail.pop("raw_properties", [])
+                    primary_cadastre, primary_suburb = upsert_da_properties(
+                        conn, app_num, raw_properties
+                    )
+                    if primary_suburb:
+                        detail["suburb"] = primary_suburb
+                    log.info(
+                        f"{prefix}   {len(raw_properties)} property row(s) — "
+                        f"primary cadastre: {primary_cadastre}"
+                    )
 
                     upsert_detail(conn, app_num, detail)
                     log.info(f"{prefix}   Updated {len(detail)} fields")
@@ -1286,6 +1370,11 @@ def run_monitor(page: Page, conn, limit) -> None:
             parsed = parse_description(detail.get("description"), app_type)
             detail.update(parsed)
 
+            raw_properties = detail.pop("raw_properties", [])
+            _, primary_suburb = upsert_da_properties(conn, app_num, raw_properties)
+            if primary_suburb:
+                detail["suburb"] = primary_suburb
+
             upsert_detail(conn, app_num, detail)
             updated += 1
 
@@ -1313,45 +1402,6 @@ def run_monitor(page: Page, conn, limit) -> None:
     log.info(f"Monitor complete. Updated: {updated}, newly closed: {closed}")
 
 
-def run_backfill_plan(conn) -> None:
-    """Resolve and store cadastre_plan for all DAs that have a lot_plan but no cadastre_plan."""
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT application_number, lot_plan
-        FROM goldcoast_dev_applications
-        WHERE lot_plan IS NOT NULL AND cadastre_lotplan IS NULL
-        ORDER BY application_number
-        """
-    )
-    rows = cur.fetchall()
-    cur.close()
-
-    total = len(rows)
-    log.info(f"Backfilling cadastre_lotplan for {total} DAs...")
-
-    resolved = 0
-    unresolved = 0
-    for i, (app_num, lot_plan) in enumerate(rows, 1):
-        lotplan = resolve_cadastre_lotplan(conn, lot_plan)
-        if lotplan is not None:
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE goldcoast_dev_applications SET cadastre_lotplan = %s WHERE application_number = %s",
-                (lotplan, app_num),
-            )
-            conn.commit()
-            cur.close()
-            resolved += 1
-        else:
-            unresolved += 1
-
-        if i % 500 == 0:
-            log.info(f"  {i}/{total} processed ({resolved} resolved, {unresolved} unresolved)")
-
-    log.info(f"Backfill complete: {resolved} resolved, {unresolved} unresolved (no cadastre match)")
-
-
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
@@ -1366,9 +1416,6 @@ def main():
                       help="Enrich existing records with detail-page data")
     mode.add_argument("--monitor", action="store_true",
                       help="Re-check active applications for status/detail updates")
-    mode.add_argument("--backfill-plan", action="store_true",
-                      help="Resolve cadastre_plan for all rows that have a lot_plan but no cadastre_plan")
-
     parser.add_argument("--days", type=int, default=30,
                         help="Delta: scrape last N days (default 30)")
     parser.add_argument("--from-date", type=str,
@@ -1407,8 +1454,6 @@ def main():
         if args.enrich:
             # run_enrich manages its own browser sessions per worker
             run_enrich(conn, args.limit, include_closed=args.include_closed, args=args)
-        elif args.backfill_plan:
-            run_backfill_plan(conn)
         else:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=not args.headed)

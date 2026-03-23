@@ -3,7 +3,7 @@
  *
  * Returns development applications near a property, with centroid coordinates
  * for map display. Joins goldcoast_dev_applications to qld_cadastre_address
- * via the lot_plan column to get point coordinates for spatial filtering.
+ * via goldcoast_da_properties to get point coordinates for spatial filtering.
  *
  * Only returns DAs that are matched to cadastre records (~58% of all DAs).
  * Unmatched DAs (no cadastre record) cannot be placed on the map.
@@ -85,9 +85,10 @@ export async function GET(req: NextRequest) {
          ST_X(a.geometry) AS lng,
          ST_Distance(a.geometry::geography, ref.geom::geography)::int AS distance_m
        FROM goldcoast_dev_applications da
-       JOIN qld_cadastre_address a ON a.lotplan = da.lot_plan
+       JOIN goldcoast_da_properties dp ON dp.application_number = da.application_number
+       JOIN qld_cadastre_address a ON a.lotplan = dp.cadastre_lotplan
        CROSS JOIN ref
-       WHERE da.lot_plan IS NOT NULL
+       WHERE dp.cadastre_lotplan IS NOT NULL
          AND ST_DWithin(a.geometry::geography, ref.geom::geography, $2)
        ORDER BY da.application_number, distance_m
        LIMIT 500`,

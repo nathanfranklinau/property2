@@ -18,16 +18,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await db.query<{ da_count: number }>(
-      `SELECT COUNT(da.application_number)::int AS da_count
+      `SELECT COUNT(DISTINCT da.application_number)::int AS da_count
        FROM parcels p
-       LEFT JOIN goldcoast_dev_applications da ON (
+       JOIN goldcoast_da_properties dp ON (
          CASE
            WHEN p.cadastre_lot = 'COMPLEX'
-             THEN da.cadastre_lotplan LIKE '%' || p.cadastre_plan
+             THEN dp.cadastre_lotplan LIKE '%' || p.cadastre_plan
            ELSE
-             da.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
+             dp.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
          END
        )
+       JOIN goldcoast_dev_applications da ON da.application_number = dp.application_number
        WHERE p.id = $1
          AND p.lga_name ILIKE '%gold coast%'
        GROUP BY p.id`,

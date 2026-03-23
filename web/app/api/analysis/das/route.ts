@@ -17,8 +17,6 @@ export type DevelopmentApplication = {
   status: string | null;
   suburb: string | null;
   location_address: string | null;
-  lot_on_plan: string | null;
-  lot_plan: string | null;
   decision_type: string | null;
   decision_date: string | null;
   decision_authority: string | null;
@@ -61,7 +59,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await db.query<DevelopmentApplication>(
-      `SELECT
+      `SELECT DISTINCT ON (da.application_number, da.lodgement_date)
          da.application_number,
          da.description,
          da.application_type,
@@ -69,8 +67,6 @@ export async function GET(req: NextRequest) {
          da.status,
          da.suburb,
          da.location_address,
-         da.lot_on_plan,
-         da.lot_plan,
          da.decision_type,
          da.decision_date::text,
          da.decision_authority,
@@ -96,17 +92,18 @@ export async function GET(req: NextRequest) {
          da.appeal_period_started::text,
          da.appeal_period_completed::text
        FROM parcels p
-       JOIN goldcoast_dev_applications da ON (
+       JOIN goldcoast_da_properties dp ON (
          CASE
            WHEN p.cadastre_lot = 'COMPLEX'
-             THEN da.cadastre_lotplan LIKE '%' || p.cadastre_plan
+             THEN dp.cadastre_lotplan LIKE '%' || p.cadastre_plan
            ELSE
-             da.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
+             dp.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
          END
        )
+       JOIN goldcoast_dev_applications da ON da.application_number = dp.application_number
        WHERE p.id = $1
          AND p.lga_name ILIKE '%gold coast%'
-       ORDER BY da.lodgement_date DESC NULLS LAST`,
+       ORDER BY da.application_number, da.lodgement_date DESC NULLS LAST`,
       [parcelId]
     );
 
