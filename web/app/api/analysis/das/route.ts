@@ -96,11 +96,14 @@ export async function GET(req: NextRequest) {
          da.appeal_period_started::text,
          da.appeal_period_completed::text
        FROM parcels p
-       JOIN goldcoast_dev_applications da
-         ON (CASE
-               WHEN p.cadastre_lot = 'COMPLEX' THEN da.lot_plan LIKE '%' || p.cadastre_plan
-               ELSE da.lot_plan = p.cadastre_lot || p.cadastre_plan
-             END)
+       JOIN goldcoast_dev_applications da ON (
+         CASE
+           WHEN p.cadastre_lot = 'COMPLEX'
+             THEN da.cadastre_lotplan LIKE '%' || p.cadastre_plan
+           ELSE
+             da.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
+         END
+       )
        WHERE p.id = $1
          AND p.lga_name ILIKE '%gold coast%'
        ORDER BY da.lodgement_date DESC NULLS LAST`,

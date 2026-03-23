@@ -118,7 +118,7 @@ async function fetchEncumbrances(lot: string, plan: string): Promise<{ rows: Rec
 async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: Record<string, unknown>[]; query: string }> {
   const lotplan = `${lot}${plan}`;
   const sql = `SELECT application_number, description, application_type, lodgement_date, status,
-            suburb, location_address, lot_on_plan, lot_plan,
+            suburb, location_address, lot_on_plan, lot_plan, cadastre_lotplan,
             pre_assessment_started, pre_assessment_completed,
             confirmation_notice_started, confirmation_notice_completed,
             decision_started, decision_completed,
@@ -130,7 +130,7 @@ async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: 
             workflow_events, documents_summary,
             first_scraped_at, last_scraped_at, detail_scraped_at
      FROM goldcoast_dev_applications
-     WHERE lot_plan = $1
+     WHERE lot_plan = $1 OR cadastre_lotplan = $1
      ORDER BY lodgement_date DESC`;
   const result = await db.query(sql, [lotplan]);
   return { rows: result.rows, query: sql };
