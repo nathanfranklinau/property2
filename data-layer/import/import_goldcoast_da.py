@@ -773,6 +773,54 @@ def lookup_suburb_from_cadastre(conn, lot_plan: str) -> str | None:
     return row[0] if row else None
 
 
+def resolve_cadastre_lotplan(conn, lot_plan: str) -> str | None:
+    """Resolve a DA lot_plan to the matching lotplan in qld_cadastre_parcels.
+
+    Strategy:
+      1. Exact match in qld_cadastre_parcels → return that lotplan
+      2. Match in qld_cadastre_address (unit lot not in parcels) → return the
+         largest Lot Type Parcel for that plan (Lot 0 common property)
+      3. No match → None
+
+    Returns a full lot+plan string (e.g. "0SP267345"), suitable for direct
+    equality joins against qld_cadastre_parcels.lotplan.
+    """
+    if not lot_plan:
+        return None
+    cur = conn.cursor()
+    # Step 1: exact match in parcels
+    cur.execute(
+        "SELECT lotplan FROM qld_cadastre_parcels WHERE lotplan = %s LIMIT 1",
+        (lot_plan,),
+    )
+    row = cur.fetchone()
+    if row:
+        cur.close()
+        return row[0]
+    # Step 2: unit lot — match via address table, resolve to common property parcel
+    cur.execute(
+        "SELECT plan FROM qld_cadastre_address WHERE lotplan = %s LIMIT 1",
+        (lot_plan,),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        return None
+    plan = row[0]
+    cur.execute(
+        """
+        SELECT lotplan FROM qld_cadastre_parcels
+        WHERE plan = %s AND parcel_typ = 'Lot Type Parcel' AND lot_area > 0
+        ORDER BY lot_area DESC
+        LIMIT 1
+        """,
+        (plan,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    return row[0] if row else None
+
+
 def _monitoring_status_for(status: str | None) -> str:
     return "closed" if is_terminal(status) else "active"
 
@@ -863,6 +911,7 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         "status", "monitoring_status",
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to", "assessment_level",
+        "cadastre_lotplan",
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
@@ -1058,13 +1107,16 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                     parsed = parse_description(detail.get("description"), app_type)
                     detail.update(parsed)
 
-                    # Authoritative suburb from cadastre (overrides scraped suburb)
+                    # Authoritative suburb + cadastre_lotplan resolution
                     # Mirrors the lot_plan generated column: strip "Lot " prefix + spaces
                     lot_plan = re.sub(r"(?i)^\s*lot\s+", "", detail.get("lot_on_plan", "") or "").replace(" ", "")
                     if lot_plan:
                         cadastre_suburb = lookup_suburb_from_cadastre(conn, lot_plan)
                         if cadastre_suburb:
                             detail["suburb"] = cadastre_suburb
+                        cadastre_lotplan = resolve_cadastre_lotplan(conn, lot_plan)
+                        if cadastre_lotplan is not None:
+                            detail["cadastre_lotplan"] = cadastre_lotplan
 
                     upsert_detail(conn, app_num, detail)
                     log.info(f"{prefix}   Updated {len(detail)} fields")
@@ -1261,6 +1313,45 @@ def run_monitor(page: Page, conn, limit) -> None:
     log.info(f"Monitor complete. Updated: {updated}, newly closed: {closed}")
 
 
+def run_backfill_plan(conn) -> None:
+    """Resolve and store cadastre_plan for all DAs that have a lot_plan but no cadastre_plan."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT application_number, lot_plan
+        FROM goldcoast_dev_applications
+        WHERE lot_plan IS NOT NULL AND cadastre_lotplan IS NULL
+        ORDER BY application_number
+        """
+    )
+    rows = cur.fetchall()
+    cur.close()
+
+    total = len(rows)
+    log.info(f"Backfilling cadastre_lotplan for {total} DAs...")
+
+    resolved = 0
+    unresolved = 0
+    for i, (app_num, lot_plan) in enumerate(rows, 1):
+        lotplan = resolve_cadastre_lotplan(conn, lot_plan)
+        if lotplan is not None:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE goldcoast_dev_applications SET cadastre_lotplan = %s WHERE application_number = %s",
+                (lotplan, app_num),
+            )
+            conn.commit()
+            cur.close()
+            resolved += 1
+        else:
+            unresolved += 1
+
+        if i % 500 == 0:
+            log.info(f"  {i}/{total} processed ({resolved} resolved, {unresolved} unresolved)")
+
+    log.info(f"Backfill complete: {resolved} resolved, {unresolved} unresolved (no cadastre match)")
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
@@ -1275,6 +1366,8 @@ def main():
                       help="Enrich existing records with detail-page data")
     mode.add_argument("--monitor", action="store_true",
                       help="Re-check active applications for status/detail updates")
+    mode.add_argument("--backfill-plan", action="store_true",
+                      help="Resolve cadastre_plan for all rows that have a lot_plan but no cadastre_plan")
 
     parser.add_argument("--days", type=int, default=30,
                         help="Delta: scrape last N days (default 30)")
@@ -1314,6 +1407,8 @@ def main():
         if args.enrich:
             # run_enrich manages its own browser sessions per worker
             run_enrich(conn, args.limit, include_closed=args.include_closed, args=args)
+        elif args.backfill_plan:
+            run_backfill_plan(conn)
         else:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=not args.headed)
