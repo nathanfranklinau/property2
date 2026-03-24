@@ -337,21 +337,10 @@ def extract_detail(page: Page) -> dict:
     desc = get_field("Full Description:") or get_field("Description:")
     if desc:
         out["description"] = desc
-        # Extract applicant/consultant from description text
-        # Allow parentheses in names (e.g. "Tricare (Taringa) Pty Ltd")
-        applicants = re.findall(r"([^,;]+?)\s*\(Primary Applicant\)", desc)
-        consultants = re.findall(r"([^,;]+?)\s*\(Consultant\)", desc)
-        if applicants:
-            # Strip leading "AppType - " prefix captured by greedy non-semicolon match
-            def _clean_name(s: str) -> str:
-                s = s.strip()
-                # Take only the part after the last " - " separator
-                if " - " in s:
-                    s = s.rsplit(" - ", 1)[-1]
-                return s.strip().strip(", ")
-            out["applicant"] = "; ".join(_clean_name(a) for a in applicants)
-        if consultants:
-            out["consultant"] = "; ".join(c.strip().strip("- ,") for c in consultants)
+        # Extract address (first segment before " - ")
+        address_part = desc.split(" - ")[0].strip()
+        if address_part:
+            out["location_address"] = address_part
 
     # -- Assessment stages table --
     # Table has columns: Description | Decision | Date
