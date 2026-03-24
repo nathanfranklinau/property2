@@ -529,7 +529,7 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
     Resolves cadastre_lotplan for each row and determines is_primary (the row
     that has a real street address, not just a bare lot reference).
 
-    Returns (primary_cadastre_lotplan, primary_suburb) for updating the parent.
+    Returns (primary_cadastre_lotplan, primary_cadastre_suburb) for updating the parent.
     """
     if not locations:
         return None, None
@@ -541,7 +541,7 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
     )
 
     primary_cadastre = None
-    primary_suburb = None
+    primary_cadastre_suburb = None
 
     for loc in locations:
         lot_raw = (
@@ -574,21 +574,20 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
         # Parsed address fields — parsed from location_address text, not from cadastre
         parsed = parse_location_address(address_raw)
 
-        final_suburb = cadastre_suburb or suburb_raw or None
-
         cur.execute(
             """
             INSERT INTO goldcoast_da_properties
                 (application_number, lot_on_plan, suburb, location_address,
                  cadastre_lotplan, is_primary,
                  cadastre_suburb, street_number, street_name, street_type,
-                 unit_type, unit_number, unit_suffix)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 unit_type, unit_number, unit_suffix,
+                 portal_suburb, state)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 application_number,
                 lot_raw or None,
-                final_suburb,
+                suburb_raw or None,
                 address_raw or None,
                 cadastre_lp,
                 is_primary,
@@ -599,16 +598,18 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
                 parsed["unit_type"],
                 parsed["unit_number"],
                 parsed["unit_suffix"],
+                suburb_raw or None,
+                "QLD",
             ),
         )
 
         if is_primary and primary_cadastre is None:
             primary_cadastre = cadastre_lp
-            primary_suburb = final_suburb
+            primary_cadastre_suburb = cadastre_suburb
 
     conn.commit()
     cur.close()
-    return primary_cadastre, primary_suburb
+    return primary_cadastre, primary_cadastre_suburb
 
 
 def upsert_summary(conn, records: list) -> int:
@@ -672,7 +673,7 @@ def upsert_summary(conn, records: list) -> int:
             "application_type": rec.get("application_type"),
             "lodgement_date": parse_au_date(rec.get("lodgement_date", "")),
             "status": status,
-            "suburb": rec.get("suburb") or parsed_addr["suburb"],
+            "suburb": parsed_addr["suburb"],
             "location_address": rec.get("location_address"),
             "epathway_id": rec.get("epathway_id"),
             "monitoring_status": _monitoring_status_for(status),
@@ -702,7 +703,7 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
 
     detail_columns = [
         "description",
-        "location_address", "suburb",
+        "location_address", "suburb", "cadastre_suburb",
         "street_number", "street_name", "street_type",
         "unit_type", "unit_number", "unit_suffix", "postcode",
         "responsible_officer",
@@ -918,11 +919,11 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                     # Upsert all property rows into the child table; get back the
                     # primary property's cadastre suburb to update the parent record.
                     raw_properties = detail.pop("raw_properties", [])
-                    primary_cadastre, primary_suburb = upsert_da_properties(
+                    primary_cadastre, primary_cadastre_suburb = upsert_da_properties(
                         conn, app_num, raw_properties
                     )
-                    if primary_suburb:
-                        detail["suburb"] = primary_suburb
+                    if primary_cadastre_suburb:
+                        detail["cadastre_suburb"] = primary_cadastre_suburb
                     log.info(
                         f"{prefix}   {len(raw_properties)} property row(s) — "
                         f"primary cadastre: {primary_cadastre}"
@@ -1096,10 +1097,13 @@ def run_monitor(page: Page, conn, limit) -> None:
             parsed = parse_description(detail.get("description"), app_type)
             detail.update(parsed)
 
+            parsed_addr = parse_location_address(detail.get("location_address"))
+            detail.update({k: v for k, v in parsed_addr.items() if v is not None})
+
             raw_properties = detail.pop("raw_properties", [])
-            _, primary_suburb = upsert_da_properties(conn, app_num, raw_properties)
-            if primary_suburb:
-                detail["suburb"] = primary_suburb
+            _, primary_cadastre_suburb = upsert_da_properties(conn, app_num, raw_properties)
+            if primary_cadastre_suburb:
+                detail["cadastre_suburb"] = primary_cadastre_suburb
 
             upsert_detail(conn, app_num, detail)
             updated += 1
