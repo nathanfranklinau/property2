@@ -1,0 +1,6 @@
+services:
+  libpostal:
+    image: pelias/libpostal-service
+    ports:
+      - "4400:4400"
+    restart: unless-stopped
