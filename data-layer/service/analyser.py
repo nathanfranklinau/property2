@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg2
+import psycopg2.extensions
 import psycopg2.extras
 from dotenv import load_dotenv
 from pyproj import Transformer
@@ -35,7 +36,7 @@ IMAGES_DIR = Path(os.getenv("IMAGES_DIR", "./images"))
 
 # ─── DB helpers ──────────────────────────────────────────────────────────────
 
-def get_connection():
+def get_connection() -> psycopg2.extensions.connection:
     return psycopg2.connect(
         host=os.getenv("POSTGRES_HOST", "localhost"),
         port=int(os.getenv("POSTGRES_PORT", "5432")),
@@ -45,7 +46,7 @@ def get_connection():
     )
 
 
-def update_analysis(conn, parcel_id: str, **fields):
+def update_analysis(conn: psycopg2.extensions.connection, parcel_id: str, **fields) -> None:
     """Update specific columns in property_analysis for a parcel."""
     if not fields:
         return
@@ -77,7 +78,7 @@ _GDA2020_TO_GDA94 = Transformer.from_crs("EPSG:7844", "EPSG:4283", always_xy=Tru
 
 
 def get_parcel_boundary_for_maps(
-    conn, parcel_id: str
+    conn: psycopg2.extensions.connection, parcel_id: str
 ) -> tuple[list[tuple[float, float]], tuple[float, float]] | tuple[None, None]:
     """
     Return the property boundary and centroid, transformed for Google Maps.
@@ -129,7 +130,7 @@ def get_parcel_boundary_for_maps(
     return transformed, centroid
 
 
-def get_registered_pool_count(conn, cadastre_lot: str, cadastre_plan: str) -> int:
+def get_registered_pool_count(conn: psycopg2.extensions.connection, cadastre_lot: str, cadastre_plan: str) -> int:
     """
     Look up how many registered pools are associated with this parcel.
     Matches via suburb (approximate — registered pools don't have parcel IDs).
@@ -166,7 +167,7 @@ def run_analysis(
     lat: float,
     lon: float,
     lot_area_sqm: float,
-):
+) -> None:
     """
     Full analysis pipeline. Updates property_analysis at each step.
 
@@ -360,8 +361,8 @@ def run_analysis(
         log.exception(f"Analysis failed for parcel {parcel_id}: {e}")
         try:
             update_analysis(conn, parcel_id, analysis_status="failed", error_message=str(e))
-        except Exception:
-            pass
+        except Exception as update_err:
+            log.warning(f"Could not persist failed status for parcel {parcel_id}: {update_err}")
 
     finally:
         conn.close()

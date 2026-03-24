@@ -921,8 +921,8 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                             log.error(f"{prefix}   Could not re-establish session: {se}")
                     try:
                         upsert_detail(conn, app_num, {})
-                    except Exception:
-                        pass
+                    except Exception as upsert_err:
+                        log.warning(f"Could not mark {app_num} as failed after scrape error: {upsert_err}")
                     continue
 
             log.info(f"{prefix} Enrichment complete")

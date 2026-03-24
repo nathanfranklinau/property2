@@ -786,8 +786,8 @@ def run_enrich(conn, args) -> None:
                         break
                     try:
                         upsert_detail(conn, app_num, {})
-                    except Exception:
-                        pass
+                    except Exception as upsert_err:
+                        log.warning(f"Could not mark {app_num} as failed after scrape error: {upsert_err}")
         finally:
             browser.close()
 

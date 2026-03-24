@@ -6,8 +6,10 @@ Used by both import_goldcoast_da.py and import_brisbane_da.py.
 import os
 import re
 from datetime import date, datetime, timedelta
+from typing import TypedDict
 
 import psycopg2
+import psycopg2.extensions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,6 +37,24 @@ TERMINAL_STATUSES = {
 }
 
 
+class ParsedAddress(TypedDict):
+    unit_type: str | None
+    unit_number: str | None
+    unit_suffix: str | None
+    street_number: str | None
+    street_name: str | None
+    street_type: str | None
+
+
+class ParsedDescription(TypedDict):
+    development_category: str | None
+    dwelling_type: str | None
+    unit_count: int | None
+    lot_split_from: int | None
+    lot_split_to: int | None
+    assessment_level: str | None
+
+
 def is_terminal(status: str | None) -> bool:
     """Return True if this status means the application lifecycle is over."""
     if not status:
@@ -48,7 +68,7 @@ def monitoring_status_for(status: str | None) -> str:
 
 # ── DB connection ─────────────────────────────────────────────────────────────
 
-def get_connection():
+def get_connection() -> psycopg2.extensions.connection:
     return psycopg2.connect(
         host=os.getenv("POSTGRES_HOST", "localhost"),
         port=int(os.getenv("POSTGRES_PORT", "5432")),
@@ -60,7 +80,7 @@ def get_connection():
 
 # ── Date helpers ──────────────────────────────────────────────────────────────
 
-def parse_au_date(s: str):
+def parse_au_date(s: str) -> date | None:
     """Parse DD/MM/YYYY → date, or return None."""
     if not s or not s.strip():
         return None
@@ -70,7 +90,7 @@ def parse_au_date(s: str):
         return None
 
 
-def month_ranges(start: date, end: date) -> list:
+def month_ranges(start: date, end: date) -> list[tuple[date, date]]:
     """Split a date span into per-month (from, to) pairs."""
     ranges = []
     current = start
@@ -148,7 +168,7 @@ _ROL_SUBTYPE_PATTERNS = [
 ]
 
 
-def parse_description(description: str | None, application_type: str | None) -> dict:
+def parse_description(description: str | None, application_type: str | None) -> ParsedDescription:
     """Parse a DA description into structured category fields.
 
     Returns dict with keys: development_category, dwelling_type, unit_count,
@@ -251,7 +271,7 @@ def parse_description(description: str | None, application_type: str | None) -> 
 
 # ── Cadastre resolution ──────────────────────────────────────────────────────
 
-def resolve_cadastre_lotplan(conn, lot_plan: str) -> str | None:
+def resolve_cadastre_lotplan(conn: psycopg2.extensions.connection, lot_plan: str) -> str | None:
     """Resolve a DA lot_plan to the matching lotplan in qld_cadastre_parcels.
 
     Strategy:
@@ -299,7 +319,7 @@ def resolve_cadastre_lotplan(conn, lot_plan: str) -> str | None:
     return row[0] if row else None
 
 
-def lookup_suburb_from_cadastre(conn, lot_plan: str) -> str | None:
+def lookup_suburb_from_cadastre(conn: psycopg2.extensions.connection, lot_plan: str) -> str | None:
     """Return the locality (suburb) for a lot/plan from qld_cadastre_address."""
     if not lot_plan:
         return None
@@ -313,7 +333,7 @@ def lookup_suburb_from_cadastre(conn, lot_plan: str) -> str | None:
     return row[0] if row else None
 
 
-def lookup_cadastre_suburb(cur, cadastre_lp: str) -> str | None:
+def lookup_cadastre_suburb(cur: psycopg2.extensions.cursor, cadastre_lp: str) -> str | None:
     """Return the locality for a resolved cadastre lotplan.
 
     Tries qld_cadastre_address first (has address rows for individual lots),
@@ -367,7 +387,7 @@ _RE_SUBURB_SUFFIX = re.compile(
 )
 
 
-def parse_location_address(addr: str | None) -> dict:
+def parse_location_address(addr: str | None) -> ParsedAddress:
     """Parse a free-text location address into structured fields.
 
     Handles formats seen in ePathway / Development.i Property section rows:
@@ -465,7 +485,7 @@ _RE_BRISBANE_STATE_PC = re.compile(
 )
 
 
-def parse_brisbane_address(addr: str | None) -> dict:
+def parse_brisbane_address(addr: str | None) -> ParsedAddress:
     """Parse a Brisbane Development.i portal location_address into structured fields.
 
     Format: 'NUMBER STREET_NAME TYPE  SUBURB  QLD  POSTCODE'
