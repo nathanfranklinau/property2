@@ -6,7 +6,7 @@ parsed column values already stored there as ground-truth expectations.
 """
 
 import pytest
-from da_common import parse_location_address, parse_brisbane_address
+from da_common import parse_location_address
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -121,22 +121,23 @@ _GC_CASES = [
             street_number="370", street_name="Gainsborough", street_type="Drive",
         ),
     ),
-    # --- Lot prefix: lot number becomes the street number ---
+    # --- Lot prefix without plan code: "Lot N" stripped, street number lost ---
+    # The lot number is NOT preserved as the street number.
     (
         "Lot 58 Gold Coast Highway",
-        _expected(street_number="58", street_name="Gold Coast", street_type="Highway"),
+        _expected(street_name="Gold Coast", street_type="Highway"),
     ),
     (
         "Lot 2 Hope Island Road",
-        _expected(street_number="2", street_name="Hope Island", street_type="Road"),
+        _expected(street_name="Hope Island", street_type="Road"),
     ),
     (
         "Lot 600 Ross Street",
-        _expected(street_number="600", street_name="Ross", street_type="Street"),
+        _expected(street_name="Ross", street_type="Street"),
     ),
     (
         "Lot 47 Shipper Drive",
-        _expected(street_number="47", street_name="Shipper", street_type="Drive"),
+        _expected(street_name="Shipper", street_type="Drive"),
     ),
     # --- Bare lot reference (plan code follows) → nothing parseable ---
     ("Lot 800 SP348540", _expected()),
@@ -144,9 +145,10 @@ _GC_CASES = [
     ("Lot 303 SP289809", _expected()),
     ("Lot 10 WD3134", _expected()),
     # --- "Lot NNN PLAN, ACTUAL_ADDRESS, SUBURB QLD PC" (ePathway summary format) ---
+    # Nested "Lot 47" after outer lot+plan is also stripped → street number lost.
     (
         "Lot 401 SP313661, Lot 47 Shipper Drive, COOMERA  QLD  4209",
-        _expected(street_number="47", street_name="Shipper", street_type="Drive",
+        _expected(street_name="Shipper", street_type="Drive",
                   suburb="Coomera", postcode="4209"),
     ),
     (
@@ -203,6 +205,34 @@ _GC_CASES = [
             postcode="4212",
         ),
     ),
+    # --- Lot NNN PLAN, NUMBER STREET, SUBURB QLD PC (parent table format) ---
+    (
+        "Lot 255 WD5121, 55 Eden Avenue, COOLANGATTA QLD 4225",
+        _expected(street_number="55", street_name="Eden", street_type="Avenue",
+                  suburb="Coolangatta", postcode="4225"),
+    ),
+    (
+        "Lot 0 BUP1456, 1177 Gold Coast Highway, PALM BEACH QLD 4221",
+        _expected(street_number="1177", street_name="Gold Coast", street_type="Highway",
+                  suburb="Palm Beach", postcode="4221"),
+    ),
+    # --- Nested: outer lot+plan stripped, inner "Lot 69" stripped → no street number ---
+    (
+        "Lot 7 RP815163, Lot 69 Peachey Road, ORMEAU QLD 4208",
+        _expected(street_name="Peachey", street_type="Road",
+                  suburb="Ormeau", postcode="4208"),
+    ),
+    # --- BAL/PT qualifier prefix ---
+    (
+        "BAL Lot 1 RP215138, 82 Cabbage Tree Point Road, STEIGLITZ QLD 4207",
+        _expected(street_number="82", street_name="Cabbage Tree Point", street_type="Road",
+                  suburb="Steiglitz", postcode="4207"),
+    ),
+    (
+        "PT1 Lot 0 GTP1741, 175 Palm Meadows Drive, CARRARA QLD 4211",
+        _expected(street_number="175", street_name="Palm Meadows", street_type="Drive",
+                  suburb="Carrara", postcode="4211"),
+    ),
     # --- Null / empty ---
     (None, _expected()),
     ("", _expected()),
@@ -215,68 +245,3 @@ def test_parse_location_address(addr, expected):
     assert result == expected, f"Input: {addr!r}"
 
 
-# ---------------------------------------------------------------------------
-# parse_brisbane_address — Brisbane Development.i abbreviated format
-# ---------------------------------------------------------------------------
-
-# Ground truth: rows from brisbane_da_properties where cadastre_lotplan IS NOT NULL.
-# Brisbane addresses include suburb + state + postcode; parser now extracts these.
-
-_BRIS_CASES = [
-    # --- Standard abbreviated street types ---
-    (
-        "4 TANDOOR ST MORNINGSIDE  QLD  4170",
-        _expected(street_number="4", street_name="Tandoor", street_type="Street", suburb="Morningside", postcode="4170"),
-    ),
-    (
-        "8 HADDOCK ST WINDSOR  QLD  4030",
-        _expected(street_number="8", street_name="Haddock", street_type="Street", suburb="Windsor", postcode="4030"),
-    ),
-    (
-        "89 DAYS RD GRANGE  QLD  4051",
-        _expected(street_number="89", street_name="Days", street_type="Road", suburb="Grange", postcode="4051"),
-    ),
-    (
-        "25 LANDSBORO AVE BOONDALL  QLD  4034",
-        _expected(street_number="25", street_name="Landsboro", street_type="Avenue", suburb="Boondall", postcode="4034"),
-    ),
-    (
-        "68 NYLETA ST COOPERS PLAINS  QLD  4108",
-        _expected(street_number="68", street_name="Nyleta", street_type="Street", suburb="Coopers Plains", postcode="4108"),
-    ),
-    (
-        "24 DART ST AUCHENFLOWER  QLD  4066",
-        _expected(street_number="24", street_name="Dart", street_type="Street", suburb="Auchenflower", postcode="4066"),
-    ),
-    (
-        "136 LECKIE RD KEDRON  QLD  4031",
-        _expected(street_number="136", street_name="Leckie", street_type="Road", suburb="Kedron", postcode="4031"),
-    ),
-    (
-        "1 AQUAMARINE ST HOLLAND PARK  QLD  4121",
-        _expected(street_number="1", street_name="Aquamarine", street_type="Street", suburb="Holland Park", postcode="4121"),
-    ),
-    # --- Multi-word street name ---
-    (
-        "184 COOPERS CAMP RD ASHGROVE  QLD  4060",
-        _expected(street_number="184", street_name="Coopers Camp", street_type="Road", suburb="Ashgrove", postcode="4060"),
-    ),
-    (
-        "115 NEWNHAM RD MOUNT GRAVATT EAST  QLD  4122",
-        _expected(street_number="115", street_name="Newnham", street_type="Road", suburb="Mount Gravatt East", postcode="4122"),
-    ),
-    # --- Street number with letter suffix ---
-    (
-        "2A PERRY ST HAMILTON  QLD  4007",
-        _expected(street_number="2A", street_name="Perry", street_type="Street", suburb="Hamilton", postcode="4007"),
-    ),
-    # --- Null / empty ---
-    (None, _expected()),
-    ("", _expected()),
-]
-
-
-@pytest.mark.parametrize("addr,expected", _BRIS_CASES)
-def test_parse_brisbane_address(addr, expected):
-    result = parse_brisbane_address(addr)
-    assert result == expected, f"Input: {addr!r}"

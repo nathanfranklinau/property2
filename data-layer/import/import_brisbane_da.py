@@ -67,7 +67,7 @@ from da_common import (
     parse_description,
     resolve_cadastre_lotplan,
     lookup_cadastre_suburb,
-    parse_brisbane_address,
+    parse_location_address,
 )
 
 log = logging.getLogger("import_brisbane_da")
@@ -103,6 +103,22 @@ STAGE_COLUMN_MAP = {
     "public notification compliance notice date": "public_notification_date",
     "decision notice date": "decision_notice_date",
 }
+
+
+_RE_DESC_ADDR = re.compile(r"^(.+?\bQLD\s+\d{4,5})", re.IGNORECASE)
+
+
+def _extract_description_address(description: str) -> str | None:
+    """Extract location_address from a Brisbane Full Description string.
+
+    Format: "ADDRESS QLD POSTCODE - App Type - Applicant - date"
+    Uses the QLD + postcode sentinel as a reliable end-of-address marker,
+    which handles hyphenated street numbers correctly (splitting on " - " does not).
+
+    Returns None if the sentinel is not found.
+    """
+    m = _RE_DESC_ADDR.search(description)
+    return m.group(1).strip() if m else None
 
 
 def epoch_ms_to_date(ms: int | str | None) -> date | None:
@@ -337,8 +353,7 @@ def extract_detail(page: Page) -> dict:
     desc = get_field("Full Description:") or get_field("Description:")
     if desc:
         out["description"] = desc
-        # Extract address (first segment before " - ")
-        address_part = desc.split(" - ")[0].strip()
+        address_part = _extract_description_address(desc)
         if address_part:
             out["location_address"] = address_part
 
@@ -487,6 +502,9 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         # Parsed categories
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to",
+        # Parsed address
+        "street_number", "street_name", "street_type",
+        "unit_type", "unit_number", "unit_suffix", "postcode",
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
@@ -557,10 +575,7 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
         # Cadastre suburb
         cadastre_suburb = lookup_cadastre_suburb(cur, cadastre_lp) if cadastre_lp else None
 
-        # Parsed address (Brisbane uses abbreviated types: RD, ST, AVE, etc.)
-        parsed = parse_brisbane_address(address_raw)
-
-        final_suburb = cadastre_suburb or None
+        parsed = parse_location_address(address_raw)
 
         cur.execute(
             """
@@ -568,14 +583,14 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
                 (application_number, land_number, lot_on_plan, suburb,
                  location_address, cadastre_lotplan, is_primary,
                  cadastre_suburb, street_number, street_name, street_type,
-                 unit_type, unit_number, unit_suffix)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 unit_type, unit_number, unit_suffix, postcode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 application_number,
                 land_number,
                 lot_on_plan,
-                final_suburb,
+                parsed["suburb"],
                 address_raw,
                 cadastre_lp,
                 is_primary,
@@ -586,12 +601,13 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
                 parsed["unit_type"],
                 parsed["unit_number"],
                 parsed["unit_suffix"],
+                parsed["postcode"],
             ),
         )
 
         if is_primary and primary_cadastre is None:
             primary_cadastre = cadastre_lp
-            primary_suburb = final_suburb
+            primary_suburb = parsed["suburb"]
 
     conn.commit()
     cur.close()
@@ -675,6 +691,13 @@ def enrich_one(page: Page, conn, app_num: str, app_type: str | None) -> None:
     for k, v in parsed.items():
         if v is not None and detail.get(k) is None:
             detail[k] = v
+
+    # Parse location_address into street/suburb/postcode components
+    if detail.get("location_address"):
+        parsed_addr = parse_location_address(detail["location_address"])
+        for k, v in parsed_addr.items():
+            if v is not None:
+                detail.setdefault(k, v)
 
     # Extract and resolve properties
     raw_properties = detail.pop("_properties", [])
