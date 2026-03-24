@@ -21,7 +21,22 @@
       "Bash(psql postgresql://realestate:realestate@localhost:5432/realestatev2 -c \"SELECT DISTINCT zone_code, zone_name FROM qld_planning_zones LIMIT 50;\")",
       "WebFetch(domain:services-ap1.arcgis.com)",
       "Bash(mkdir -p ~/.claude/channels/telegram/approved)",
-      "Bash(~/.claude/channels/telegram/approved/42922653)"
+      "Bash(~/.claude/channels/telegram/approved/42922653)",
+      "Bash(psql \"postgresql://realestate:realestate@localhost:5432/realestatev2\" -c \":*)",
+      "Bash(venv/bin/python -m pytest --version)",
+      "Bash(venv/bin/pip install:*)",
+      "Bash(venv/bin/pytest tests/ -v)",
+      "Bash(PYTHONPATH=/Users/Nathan/IdeaProjects/vibing/realestatev2/data-layer/import /Users/Nathan/IdeaProjects/vibing/realestatev2/data-layer/venv/bin/pytest /Users/Nathan/IdeaProjects/vibing/realestatev2/.claude/worktrees/bridge-cse_01ConP2QJCuZ2NXtHn7dMaYW/data-layer/tests/ -v)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(/Users/Nathan/IdeaProjects/vibing/realestatev2/data-layer/venv/bin/pytest tests/ -v)",
+      "Bash(make test:*)",
+      "Bash(ln -s /Users/Nathan/IdeaProjects/vibing/realestatev2/data-layer/venv /Users/Nathan/IdeaProjects/vibing/realestatev2/.claude/worktrees/bridge-cse_01ConP2QJCuZ2NXtHn7dMaYW/data-layer/venv)",
+      "Bash(git restore:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git rebase:*)",
+      "Bash(git stash:*)"
     ]
   },
   "enabledPlugins": {
