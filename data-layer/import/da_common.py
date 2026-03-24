@@ -44,6 +44,8 @@ class ParsedAddress(TypedDict):
     street_number: str | None
     street_name: str | None
     street_type: str | None
+    suburb: str | None
+    postcode: str | None
 
 
 class ParsedDescription(TypedDict):
@@ -386,6 +388,13 @@ _RE_SUBURB_SUFFIX = re.compile(
     r"|,?\s+\d{4}\s*$",
 )
 
+# Capture suburb + postcode from the trailing suffix (named groups)
+_RE_SUBURB_CAPTURE = re.compile(
+    r",?\s+([A-Z][A-Z ]*?)\s+(?:QLD|NSW|VIC|SA|WA|TAS|ACT|NT)\s+(\d{4})\s*$",
+    re.IGNORECASE,
+)
+_RE_PC_ONLY_CAPTURE = re.compile(r",?\s+(\d{4})\s*$")
+
 
 def parse_location_address(addr: str | None) -> ParsedAddress:
     """Parse a free-text location address into structured fields.
@@ -402,14 +411,25 @@ def parse_location_address(addr: str | None) -> ParsedAddress:
                             street_number, street_name, street_type.
     All values are str or None.
     """
-    out = {
+    out: ParsedAddress = {
         "unit_type": None, "unit_number": None, "unit_suffix": None,
         "street_number": None, "street_name": None, "street_type": None,
+        "suburb": None, "postcode": None,
     }
     if not addr:
         return out
 
     text = addr.strip()
+
+    # --- Extract suburb + postcode from trailing suffix before stripping ---
+    m_suburb = _RE_SUBURB_CAPTURE.search(text)
+    if m_suburb:
+        out["suburb"] = m_suburb.group(1).strip().title()
+        out["postcode"] = m_suburb.group(2)
+    else:
+        m_pc = _RE_PC_ONLY_CAPTURE.search(text)
+        if m_pc:
+            out["postcode"] = m_pc.group(1)
 
     # --- Unit prefix ---
     m = _RE_UNIT_PREFIX.match(text)
@@ -497,9 +517,10 @@ def parse_brisbane_address(addr: str | None) -> ParsedAddress:
     Returns dict with keys: unit_type, unit_number, unit_suffix,
                             street_number, street_name, street_type.
     """
-    out = {
+    out: ParsedAddress = {
         "unit_type": None, "unit_number": None, "unit_suffix": None,
         "street_number": None, "street_name": None, "street_type": None,
+        "suburb": None, "postcode": None,
     }
     if not addr:
         return out

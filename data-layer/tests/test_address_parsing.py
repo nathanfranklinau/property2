@@ -19,6 +19,8 @@ _EMPTY = {
     "street_number": None,
     "street_name": None,
     "street_type": None,
+    "suburb": None,
+    "postcode": None,
 }
 
 
@@ -141,6 +143,39 @@ _GC_CASES = [
     ("Lot 1 RP152544", _expected()),
     ("Lot 303 SP289809", _expected()),
     ("Lot 10 WD3134", _expected()),
+    # --- Suburb + postcode suffix ---
+    (
+        "635 Gold Coast Springbrook Road, MUDGEERABA QLD 4213",
+        _expected(
+            street_number="635",
+            street_name="Gold Coast Springbrook",
+            street_type="Road",
+            suburb="Mudgeeraba",
+            postcode="4213",
+        ),
+    ),
+    (
+        "2 River Terrace, HOPE ISLAND QLD 4212",
+        _expected(
+            street_number="2",
+            street_name="River",
+            street_type="Terrace",
+            suburb="Hope Island",
+            postcode="4212",
+        ),
+    ),
+    (
+        "UNIT 4, 19 Santa Barbara Road, HOPE ISLAND QLD 4212",
+        _expected(
+            unit_type="UNIT",
+            unit_number="4",
+            street_number="19",
+            street_name="Santa Barbara",
+            street_type="Road",
+            suburb="Hope Island",
+            postcode="4212",
+        ),
+    ),
     # --- Null / empty ---
     (None, _expected()),
     ("", _expected()),

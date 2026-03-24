@@ -624,11 +624,15 @@ def upsert_summary(conn, records: list) -> int:
         INSERT INTO goldcoast_dev_applications
             (application_number, description, application_type,
              lodgement_date, status, suburb, location_address,
-             epathway_id, monitoring_status, last_scraped_at)
+             epathway_id, monitoring_status, last_scraped_at,
+             street_number, street_name, street_type,
+             unit_type, unit_number, unit_suffix, postcode)
         VALUES
             (%(application_number)s, %(description)s, %(application_type)s,
              %(lodgement_date)s, %(status)s, %(suburb)s, %(location_address)s,
-             %(epathway_id)s, %(monitoring_status)s, NOW())
+             %(epathway_id)s, %(monitoring_status)s, NOW(),
+             %(street_number)s, %(street_name)s, %(street_type)s,
+             %(unit_type)s, %(unit_number)s, %(unit_suffix)s, %(postcode)s)
         ON CONFLICT (application_number) DO UPDATE SET
             description      = COALESCE(EXCLUDED.description, goldcoast_dev_applications.description),
             application_type = COALESCE(EXCLUDED.application_type, goldcoast_dev_applications.application_type),
@@ -643,7 +647,14 @@ def upsert_summary(conn, records: list) -> int:
                 THEN NOW()
                 ELSE goldcoast_dev_applications.status_changed_at
             END,
-            last_scraped_at  = NOW()
+            last_scraped_at  = NOW(),
+            street_number    = EXCLUDED.street_number,
+            street_name      = EXCLUDED.street_name,
+            street_type      = EXCLUDED.street_type,
+            unit_type        = EXCLUDED.unit_type,
+            unit_number      = EXCLUDED.unit_number,
+            unit_suffix      = EXCLUDED.unit_suffix,
+            postcode         = EXCLUDED.postcode
     """
 
     cur = conn.cursor()
@@ -654,16 +665,24 @@ def upsert_summary(conn, records: list) -> int:
             continue
 
         status = rec.get("status")
+        parsed_addr = parse_location_address(rec.get("location_address"))
         params = {
             "application_number": app_num,
             "description": rec.get("description"),
             "application_type": rec.get("application_type"),
             "lodgement_date": parse_au_date(rec.get("lodgement_date", "")),
             "status": status,
-            "suburb": rec.get("suburb"),
+            "suburb": rec.get("suburb") or parsed_addr["suburb"],
             "location_address": rec.get("location_address"),
             "epathway_id": rec.get("epathway_id"),
             "monitoring_status": _monitoring_status_for(status),
+            "street_number": parsed_addr["street_number"],
+            "street_name": parsed_addr["street_name"],
+            "street_type": parsed_addr["street_type"],
+            "unit_type": parsed_addr["unit_type"],
+            "unit_number": parsed_addr["unit_number"],
+            "unit_suffix": parsed_addr["unit_suffix"],
+            "postcode": parsed_addr["postcode"],
         }
         cur.execute(sql, params)
         count += 1
@@ -684,6 +703,8 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
     detail_columns = [
         "description",
         "location_address", "suburb",
+        "street_number", "street_name", "street_type",
+        "unit_type", "unit_number", "unit_suffix", "postcode",
         "responsible_officer",
         "workflow_events",
         "pre_assessment_started", "pre_assessment_completed",
@@ -891,6 +912,8 @@ def _enrich_chunk(worker_id: int, rows: list, args) -> None:
                     detail = extract_detail_data(raw)
                     parsed = parse_description(detail.get("description"), app_type)
                     detail.update(parsed)
+                    parsed_addr = parse_location_address(detail.get("location_address"))
+                    detail.update({k: v for k, v in parsed_addr.items() if v is not None})
 
                     # Upsert all property rows into the child table; get back the
                     # primary property's cadastre suburb to update the parent record.
