@@ -443,12 +443,33 @@ def parse_location_address(addr: str | None) -> ParsedAddress:
     if lot_match:
         lot_num = lot_match.group(1)
         rest = lot_match.group(2).strip()
-        # If the next token looks like a plan code → bare lot ref, bail out
-        first_token = rest.split()[0] if rest else ""
-        if _RE_PLAN_CODE.match(first_token):
-            return out
-        # Otherwise the lot number IS the street number
-        text = f"{lot_num} {rest}"
+        # "Lot NNN PLAN, ACTUAL_ADDRESS" — ePathway summary table prepends the
+        # cadastre ref (any letters+digit token) to the street address.
+        # Strip it and parse the remainder.
+        plan_comma = re.match(r"^([A-Z]+\d\w*),\s*(.*)", rest, re.IGNORECASE)
+        if plan_comma and plan_comma.group(2).strip():
+            remainder = plan_comma.group(2).strip()
+            # Unit prefix may appear after the plan code (e.g. "UNIT 29, 96 Galleon Way")
+            unit_m = _RE_UNIT_PREFIX.match(remainder)
+            if unit_m:
+                out["unit_type"] = unit_m.group(1).upper()
+                out["unit_number"] = unit_m.group(2)
+                remainder = remainder[unit_m.end():]
+            # Remainder may itself start with "Lot NN" where lot = street number
+            nested_lot = re.match(r"^Lot\s+(\S+)\s+(.*)", remainder, re.IGNORECASE)
+            if nested_lot:
+                nested_first = nested_lot.group(2).split()[0] if nested_lot.group(2).strip() else ""
+                if re.match(r"^[A-Z]+\d", nested_first, re.IGNORECASE):
+                    return out  # nested bare lot ref
+                text = f"{nested_lot.group(1)} {nested_lot.group(2)}".strip()
+            else:
+                text = remainder
+        else:
+            # No plan+comma — bare lot ref or lot number IS the street number
+            first_token = rest.split()[0] if rest else ""
+            if _RE_PLAN_CODE.match(first_token):
+                return out
+            text = f"{lot_num} {rest}"
 
     # --- Strip trailing suburb / state / postcode ---
     text = _RE_SUBURB_SUFFIX.sub("", text).strip()
@@ -515,7 +536,8 @@ def parse_brisbane_address(addr: str | None) -> ParsedAddress:
     through the remaining words to find the last known street type.
 
     Returns dict with keys: unit_type, unit_number, unit_suffix,
-                            street_number, street_name, street_type.
+                            street_number, street_name, street_type,
+                            suburb, postcode.
     """
     out: ParsedAddress = {
         "unit_type": None, "unit_number": None, "unit_suffix": None,
@@ -537,6 +559,11 @@ def parse_brisbane_address(addr: str | None) -> ParsedAddress:
         out["unit_number"] = m.group(2)
         text = m.group(3).strip()
 
+    # Extract postcode before stripping state+postcode
+    pc_m = re.search(r"\s+(?:QLD|NSW|VIC|SA|WA|TAS|ACT|NT)\s+(\d{4})\s*$", text)
+    if pc_m:
+        out["postcode"] = pc_m.group(1)
+
     # Strip state + postcode
     text = _RE_BRISBANE_STATE_PC.sub("", text).strip()
 
@@ -552,7 +579,6 @@ def parse_brisbane_address(addr: str | None) -> ParsedAddress:
     rest = words[1:]  # [name_words… type suburb_words…]
 
     # Find the LAST word that is a known abbreviated or full street type.
-    # Everything after it is the suburb (ignored here; comes from cadastre).
     type_idx = next(
         (i for i in range(len(rest) - 1, -1, -1) if rest[i].upper() in _BRISBANE_ALL_TYPES),
         None,
@@ -563,5 +589,9 @@ def parse_brisbane_address(addr: str | None) -> ParsedAddress:
     out["street_type"] = _BRISBANE_ALL_TYPES[rest[type_idx].upper()]
     if type_idx > 0:
         out["street_name"] = " ".join(w.title() for w in rest[:type_idx])
+
+    # Suburb = tokens after the street type
+    if type_idx < len(rest) - 1:
+        out["suburb"] = " ".join(w.title() for w in rest[type_idx + 1:])
 
     return out

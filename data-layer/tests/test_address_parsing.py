@@ -143,6 +143,33 @@ _GC_CASES = [
     ("Lot 1 RP152544", _expected()),
     ("Lot 303 SP289809", _expected()),
     ("Lot 10 WD3134", _expected()),
+    # --- "Lot NNN PLAN, ACTUAL_ADDRESS, SUBURB QLD PC" (ePathway summary format) ---
+    (
+        "Lot 401 SP313661, Lot 47 Shipper Drive, COOMERA  QLD  4209",
+        _expected(street_number="47", street_name="Shipper", street_type="Drive",
+                  suburb="Coomera", postcode="4209"),
+    ),
+    (
+        "Lot 74 SP253434, 36 Buckingham Road, MAUDSLAND  QLD  4210",
+        _expected(street_number="36", street_name="Buckingham", street_type="Road",
+                  suburb="Maudsland", postcode="4210"),
+    ),
+    (
+        "Lot 24 B70832, 107 Golden Four Drive, BILINGA  QLD  4225",
+        _expected(street_number="107", street_name="Golden Four", street_type="Drive",
+                  suburb="Bilinga", postcode="4225"),
+    ),
+    (
+        "Lot 81 RP139722, 81 Clear Island Road, BROADBEACH WATERS  QLD  4218",
+        _expected(street_number="81", street_name="Clear Island", street_type="Road",
+                  suburb="Broadbeach Waters", postcode="4218"),
+    ),
+    (
+        "Lot 29 GTP3991, UNIT 29, 96 Galleon Way, CURRUMBIN WATERS  QLD  4223",
+        _expected(unit_type="UNIT", unit_number="29",
+                  street_number="96", street_name="Galleon", street_type="Way",
+                  suburb="Currumbin Waters", postcode="4223"),
+    ),
     # --- Suburb + postcode suffix ---
     (
         "635 Gold Coast Springbrook Road, MUDGEERABA QLD 4213",
@@ -193,55 +220,55 @@ def test_parse_location_address(addr, expected):
 # ---------------------------------------------------------------------------
 
 # Ground truth: rows from brisbane_da_properties where cadastre_lotplan IS NOT NULL.
-# Brisbane addresses include suburb + state + postcode; parser strips those.
+# Brisbane addresses include suburb + state + postcode; parser now extracts these.
 
 _BRIS_CASES = [
     # --- Standard abbreviated street types ---
     (
         "4 TANDOOR ST MORNINGSIDE  QLD  4170",
-        _expected(street_number="4", street_name="Tandoor", street_type="Street"),
+        _expected(street_number="4", street_name="Tandoor", street_type="Street", suburb="Morningside", postcode="4170"),
     ),
     (
         "8 HADDOCK ST WINDSOR  QLD  4030",
-        _expected(street_number="8", street_name="Haddock", street_type="Street"),
+        _expected(street_number="8", street_name="Haddock", street_type="Street", suburb="Windsor", postcode="4030"),
     ),
     (
         "89 DAYS RD GRANGE  QLD  4051",
-        _expected(street_number="89", street_name="Days", street_type="Road"),
+        _expected(street_number="89", street_name="Days", street_type="Road", suburb="Grange", postcode="4051"),
     ),
     (
         "25 LANDSBORO AVE BOONDALL  QLD  4034",
-        _expected(street_number="25", street_name="Landsboro", street_type="Avenue"),
+        _expected(street_number="25", street_name="Landsboro", street_type="Avenue", suburb="Boondall", postcode="4034"),
     ),
     (
         "68 NYLETA ST COOPERS PLAINS  QLD  4108",
-        _expected(street_number="68", street_name="Nyleta", street_type="Street"),
+        _expected(street_number="68", street_name="Nyleta", street_type="Street", suburb="Coopers Plains", postcode="4108"),
     ),
     (
         "24 DART ST AUCHENFLOWER  QLD  4066",
-        _expected(street_number="24", street_name="Dart", street_type="Street"),
+        _expected(street_number="24", street_name="Dart", street_type="Street", suburb="Auchenflower", postcode="4066"),
     ),
     (
         "136 LECKIE RD KEDRON  QLD  4031",
-        _expected(street_number="136", street_name="Leckie", street_type="Road"),
+        _expected(street_number="136", street_name="Leckie", street_type="Road", suburb="Kedron", postcode="4031"),
     ),
     (
         "1 AQUAMARINE ST HOLLAND PARK  QLD  4121",
-        _expected(street_number="1", street_name="Aquamarine", street_type="Street"),
+        _expected(street_number="1", street_name="Aquamarine", street_type="Street", suburb="Holland Park", postcode="4121"),
     ),
     # --- Multi-word street name ---
     (
         "184 COOPERS CAMP RD ASHGROVE  QLD  4060",
-        _expected(street_number="184", street_name="Coopers Camp", street_type="Road"),
+        _expected(street_number="184", street_name="Coopers Camp", street_type="Road", suburb="Ashgrove", postcode="4060"),
     ),
     (
         "115 NEWNHAM RD MOUNT GRAVATT EAST  QLD  4122",
-        _expected(street_number="115", street_name="Newnham", street_type="Road"),
+        _expected(street_number="115", street_name="Newnham", street_type="Road", suburb="Mount Gravatt East", postcode="4122"),
     ),
     # --- Street number with letter suffix ---
     (
         "2A PERRY ST HAMILTON  QLD  4007",
-        _expected(street_number="2A", street_name="Perry", street_type="Street"),
+        _expected(street_number="2A", street_name="Perry", street_type="Street", suburb="Hamilton", postcode="4007"),
     ),
     # --- Null / empty ---
     (None, _expected()),
