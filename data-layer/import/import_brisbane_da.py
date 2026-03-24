@@ -67,7 +67,7 @@ from da_common import (
     parse_description,
     resolve_cadastre_lotplan,
     lookup_cadastre_suburb,
-    parse_location_address,
+    parse_brisbane_address,
 )
 
 log = logging.getLogger("import_brisbane_da")
@@ -568,8 +568,8 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
         # Cadastre suburb
         cadastre_suburb = lookup_cadastre_suburb(cur, cadastre_lp) if cadastre_lp else None
 
-        # Parsed address
-        parsed = parse_location_address(address_raw)
+        # Parsed address (Brisbane uses abbreviated types: RD, ST, AVE, etc.)
+        parsed = parse_brisbane_address(address_raw)
 
         final_suburb = cadastre_suburb or None
 

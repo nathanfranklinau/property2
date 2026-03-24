@@ -439,3 +439,88 @@ def parse_location_address(addr: str | None) -> dict:
             out["street_name"] = " ".join(w.title() for w in words[:-1])
 
     return out
+
+
+# Brisbane portal uses abbreviated street types (RD, ST, AVE, …) not full words.
+_BRISBANE_ABBREVS = {
+    "RD": "Road",       "ST": "Street",    "AVE": "Avenue",   "AV": "Avenue",
+    "CT": "Court",      "DR": "Drive",     "PL": "Place",     "CL": "Close",
+    "CR": "Crescent",   "CRS": "Crescent", "GR": "Grove",     "TCE": "Terrace",
+    "HWY": "Highway",   "BLVD": "Boulevard", "PKWY": "Parkway",
+    "CSO": "Causeway",  "CCT": "Circuit",  "CIR": "Circuit",
+    "ESP": "Esplanade", "MWY": "Motorway", "SQ": "Square",
+    "WY": "Way",        "WK": "Walk",      "TR": "Trail",
+    "PDE": "Parade",    "PROM": "Promenade", "RDGE": "Ridge",
+    "ROW": "Row",       "RISE": "Rise",
+}
+
+# Union of abbreviated and full-form types for type-detection
+_BRISBANE_ALL_TYPES: dict = {
+    **_BRISBANE_ABBREVS,
+    **{t: t.title() for t in _STREET_TYPES},
+}
+
+_RE_BRISBANE_STATE_PC = re.compile(
+    r"\s+(?:QLD|NSW|VIC|SA|WA|TAS|ACT|NT)\s+\d{4}\s*$"
+)
+
+
+def parse_brisbane_address(addr: str | None) -> dict:
+    """Parse a Brisbane Development.i portal location_address into structured fields.
+
+    Format: 'NUMBER STREET_NAME TYPE  SUBURB  QLD  POSTCODE'
+    Street types are abbreviated (RD, ST, AVE, …); no comma before suburb.
+    Double spaces separate suburb from QLD/postcode, but single spaces separate
+    all other tokens — so we strip state+postcode first, then work backwards
+    through the remaining words to find the last known street type.
+
+    Returns dict with keys: unit_type, unit_number, unit_suffix,
+                            street_number, street_name, street_type.
+    """
+    out = {
+        "unit_type": None, "unit_number": None, "unit_suffix": None,
+        "street_number": None, "street_name": None, "street_type": None,
+    }
+    if not addr:
+        return out
+
+    text = addr.strip()
+
+    # Unit prefix: "UNIT 3/89 …" or "3/89 …"
+    m = re.match(
+        r"^(?:(UNIT|FLAT|APT|SHOP|SUITE)\s+)?(\d+\w*)\s*/\s*(.+)$",
+        text, re.IGNORECASE,
+    )
+    if m:
+        out["unit_type"] = (m.group(1) or "UNIT").upper()
+        out["unit_number"] = m.group(2)
+        text = m.group(3).strip()
+
+    # Strip state + postcode
+    text = _RE_BRISBANE_STATE_PC.sub("", text).strip()
+
+    # Now: "89 DAYS RD GRANGE" / "184 COOPERS CAMP RD ASHGROVE" etc.
+    words = text.split()
+    if len(words) < 2:
+        return out
+
+    # First token must be the street number
+    if not re.match(r"^\d+\w*(?:-\d+\w*)?$", words[0]):
+        return out
+    out["street_number"] = words[0]
+    rest = words[1:]  # [name_words… type suburb_words…]
+
+    # Find the LAST word that is a known abbreviated or full street type.
+    # Everything after it is the suburb (ignored here; comes from cadastre).
+    type_idx = next(
+        (i for i in range(len(rest) - 1, -1, -1) if rest[i].upper() in _BRISBANE_ALL_TYPES),
+        None,
+    )
+    if type_idx is None:
+        return out
+
+    out["street_type"] = _BRISBANE_ALL_TYPES[rest[type_idx].upper()]
+    if type_idx > 0:
+        out["street_name"] = " ".join(w.title() for w in rest[:type_idx])
+
+    return out
