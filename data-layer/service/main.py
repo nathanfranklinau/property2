@@ -7,6 +7,7 @@ Called by the Next.js app when a property has not been analysed yet.
 Routes:
     POST /analyse           Trigger analysis for a parcel (runs in background)
     GET  /analyse/{id}      Check the status of an analysis job
+    POST /parse-address     Parse a raw address string into structured fields
     GET  /health            Health check
 
 Usage:
@@ -16,12 +17,14 @@ Usage:
 import os
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .analyser import run_analysis, get_analysis_status
+from .address_parser import AddressParser
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,9 +34,21 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+_ADDRESS_MODEL_DIR = os.getenv("ADDRESS_MODEL_DIR", "training/model")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("Analysis service starting...")
+    model_path = Path(_ADDRESS_MODEL_DIR)
+    if model_path.exists():
+        app.state.address_parser = AddressParser(_ADDRESS_MODEL_DIR)
+    else:
+        app.state.address_parser = None
+        log.warning(
+            f"Address model not found at {_ADDRESS_MODEL_DIR} — "
+            "POST /parse-address will return 503 until the model is trained and placed there."
+        )
     yield
     log.info("Analysis service shutting down.")
 
@@ -124,3 +139,48 @@ def get_status(parcel_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"No analysis found for parcel {parcel_id}")
     return result
+
+
+# ─── Address parser ───────────────────────────────────────────────────────────
+
+
+class ParseAddressRequest(BaseModel):
+    address: str
+
+
+class ParseAddressResponse(BaseModel):
+    building_name: str | None = None
+    unit_type: str | None = None
+    unit_number: str | None = None
+    level_type: str | None = None
+    level_number: str | None = None
+    lot_number: str | None = None
+    street_number: str | None = None
+    street_number_last: str | None = None
+    street_name: str | None = None
+    street_type: str | None = None
+    street_suffix: str | None = None
+    suburb: str | None = None
+    state: str | None = None
+    postcode: str | None = None
+
+
+@app.post("/parse-address", response_model=ParseAddressResponse)
+def parse_address(req: ParseAddressRequest):
+    """
+    Parse a raw Australian address string into structured fields.
+
+    Requires the trained model to be present at ADDRESS_MODEL_DIR
+    (default: training/model). Returns 503 if the model has not been trained yet.
+    """
+    parser: AddressParser | None = app.state.address_parser
+    if parser is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Address parser model not loaded. "
+                "Run prepare_iob.py then train.py to generate the model."
+            ),
+        )
+    result = parser.parse(req.address)
+    return ParseAddressResponse(**result)

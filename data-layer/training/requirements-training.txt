@@ -1,0 +1,16 @@
+# Training dependencies — GPU required.
+#
+# Install PyTorch with CUDA BEFORE this file:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+# Then install this file:
+#   pip install -r training/requirements-training.txt
+
+transformers==4.51.0
+datasets==3.5.0
+evaluate==0.4.3
+seqeval==1.2.2
+accelerate==1.6.0
+pandas==2.2.3
+pyarrow==19.0.1
+numpy==1.26.4

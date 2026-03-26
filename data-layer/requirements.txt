@@ -32,3 +32,12 @@ playwright>=1.40
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv>=1.0
 tqdm>=4.66
+
+# ── Training data generation (--parquet flag) ─────────────────────────────────
+pyarrow>=15.0
+
+# ── Address parser inference ───────────────────────────────────────────────────
+# CPU-only torch is recommended for the service (much smaller install):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+# For training on your RTX 3060 install GPU torch instead (see training/TRAINING.md).
+transformers>=4.36.0
