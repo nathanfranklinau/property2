@@ -62,3 +62,7 @@ Thumbs.db
 *.swp
 *.swo
 *.log
+
+
+.csv
+.parquet

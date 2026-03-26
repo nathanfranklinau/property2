@@ -1,0 +1,18 @@
+# Python virtual environments
+data-layer/venv/
+data-layer/venv-*/
+.venv/
+
+# Node / Next.js build artifacts
+web/node_modules/
+web/.next/
+web/out/
+
+# Satellite images (large binary files)
+data-layer/images/
+
+# Model weights
+data-layer/*.pt
+
+# Python bytecode
+__pycache__/
