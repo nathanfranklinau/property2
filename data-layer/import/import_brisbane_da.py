@@ -54,6 +54,7 @@ import io
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
 
 from playwright.sync_api import sync_playwright, Page
@@ -133,6 +134,26 @@ def epoch_ms_to_date(ms: int | str | None) -> date | None:
 
 # ── CSV scrape ───────────────────────────────────────────────────────────────
 
+def _dismiss_error_dialog(page: Page) -> bool:
+    """Dismiss the 'Error contacting server' modal if it is visible.
+
+    The portal occasionally shows this dialog during AJAX map calls — it does
+    not affect the CSV download, but the modal overlay blocks the download
+    button.  Returns True if a dialog was found and dismissed.
+    """
+    try:
+        # The modal header contains "Error contacting server"; the footer has OK.
+        ok_btn = page.locator(".modal-footer button:has-text('OK')")
+        if ok_btn.count() > 0 and ok_btn.first.is_visible(timeout=500):
+            ok_btn.first.click()
+            log.warning("Dismissed 'Error contacting server' dialog")
+            time.sleep(0.5)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def set_filters(page: Page, group: str, from_date: date, to_date: date) -> None:
     """Set the search filters on the MapSearch page.
 
@@ -203,12 +224,15 @@ def set_filters(page: Page, group: str, from_date: date, to_date: date) -> None:
     log.info(f"Daterangepicker set: {set_result}")
     time.sleep(DELAY)  # wait for results to refresh after date change
 
+    _dismiss_error_dialog(page)
+
     # Hide the filter panel so it doesn't intercept clicks on the download button
     page.evaluate("document.getElementById('search-filters').style.display = 'none'")
 
 
 def download_csv(page: Page) -> str:
     """Click the CSV download button and return the CSV content."""
+    _dismiss_error_dialog(page)
     log.info("Clicking CSV download …")
 
     with page.expect_download(timeout=120000) as download_info:
@@ -622,7 +646,7 @@ def run_scrape(page: Page, conn, args) -> None:
 
     if args.from_date and args.to_date:
         from_d = date.fromisoformat(args.from_date)
-        to_d = date.fromisoformat(args.to_date)
+        to_d = min(date.fromisoformat(args.to_date), today)
         ranges = month_ranges(from_d, to_d)
     elif args.full:
         ranges = month_ranges(FULL_START_DATE, today)
@@ -644,6 +668,10 @@ def run_scrape(page: Page, conn, args) -> None:
                 time.sleep(DELAY)
 
                 set_filters(page, group, from_d, to_d)
+
+                if page.locator("text=No results found for your search").count() > 0:
+                    log.info("  No results — skipping download")
+                    continue
 
                 csv_content = download_csv(page)
                 rows = parse_csv(csv_content)
@@ -728,10 +756,59 @@ def enrich_one(page: Page, conn, app_num: str, app_type: str | None) -> None:
     log.info(f"  Updated {len(detail)} fields")
 
 
+def _enrich_chunk(worker_id: int, rows: list, args) -> None:
+    """Enrich a partition of rows in a fully isolated browser + DB session.
+
+    Each worker owns its own Playwright browser context and psycopg2
+    connection.  Rows are pre-partitioned by the caller so there is no
+    overlap between workers — no two workers ever write to the same row.
+    """
+    prefix = f"[W{worker_id}]"
+    total = len(rows)
+    conn = get_connection()
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not getattr(args, "headed", False))
+        context = browser.new_context(user_agent=USER_AGENT)
+        page = context.new_page()
+        page.set_default_timeout(30000)
+
+        try:
+            log.info(f"{prefix} Session ready — {total} records to process")
+            consecutive_errors = 0
+
+            for i, (app_num, app_type) in enumerate(rows, 1):
+                try:
+                    log.info(f"{prefix} [{i}/{total}] {app_num}")
+                    enrich_one(page, conn, app_num, app_type)
+                    consecutive_errors = 0
+                except Exception as e:
+                    log.error(f"{prefix}   Error on {app_num}: {e}")
+                    consecutive_errors += 1
+                    if consecutive_errors >= 5:
+                        log.error(f"{prefix}   5 consecutive errors — stopping")
+                        break
+                    try:
+                        upsert_detail(conn, app_num, {})
+                    except Exception as upsert_err:
+                        log.warning(f"{prefix}   Could not mark {app_num} as failed: {upsert_err}")
+
+            log.info(f"{prefix} Enrichment complete")
+        finally:
+            browser.close()
+            conn.close()
+
+
 def run_enrich(conn, args) -> None:
-    """Enrich unenriched applications."""
+    """Fetch unenriched rows then dispatch to N parallel worker sessions.
+
+    Each worker (_enrich_chunk) owns its own browser context and DB
+    connection.  Rows are partitioned by interleaving so each application
+    number appears in exactly one worker's list — no data spillover.
+    """
     cur = conn.cursor()
 
+    # --app: single record, no parallelism needed
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
@@ -744,16 +821,7 @@ def run_enrich(conn, args) -> None:
         if not row:
             log.error(f"Application '{target_app}' not found in database")
             return
-
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=not getattr(args, "headed", False))
-            context = browser.new_context(user_agent=USER_AGENT)
-            page = context.new_page()
-            page.set_default_timeout(30000)
-            try:
-                enrich_one(page, conn, row[0], row[1])
-            finally:
-                browser.close()
+        _enrich_chunk(0, [row], args)
         return
 
     conditions = ["detail_scraped_at IS NULL"]
@@ -773,35 +841,30 @@ def run_enrich(conn, args) -> None:
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 
-    log.info(f"{len(rows)} applications to enrich")
+    workers = max(1, getattr(args, "workers", 2))
+    log.info(f"{len(rows)} applications to enrich across {workers} worker(s)")
     if not rows:
         return
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=not getattr(args, "headed", False))
-        context = browser.new_context(user_agent=USER_AGENT)
-        page = context.new_page()
-        page.set_default_timeout(30000)
-        consecutive_errors = 0
+    # Interleave-partition: worker i gets rows[i], rows[i+N], rows[i+2N], ...
+    # This distributes the lodgement_date range evenly across workers.
+    chunks = [rows[i::workers] for i in range(workers)]
+    chunks = [c for c in chunks if c]
 
-        try:
-            for i, (app_num, app_type) in enumerate(rows, 1):
+    if len(chunks) == 1:
+        _enrich_chunk(0, chunks[0], args)
+    else:
+        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+            futures = {
+                executor.submit(_enrich_chunk, i, chunk, args): i
+                for i, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                worker_id = futures[future]
                 try:
-                    log.info(f"[{i}/{len(rows)}] {app_num}")
-                    enrich_one(page, conn, app_num, app_type)
-                    consecutive_errors = 0
+                    future.result()
                 except Exception as e:
-                    log.error(f"  Error on {app_num}: {e}")
-                    consecutive_errors += 1
-                    if consecutive_errors >= 5:
-                        log.error("  5 consecutive errors — stopping")
-                        break
-                    try:
-                        upsert_detail(conn, app_num, {})
-                    except Exception as upsert_err:
-                        log.warning(f"Could not mark {app_num} as failed after scrape error: {upsert_err}")
-        finally:
-            browser.close()
+                    log.error(f"Worker {worker_id} raised unhandled exception: {e}")
 
 
 def run_monitor(conn, args) -> None:
@@ -899,6 +962,8 @@ def main():
                         help="Include closed/terminal-status apps (--enrich only)")
     parser.add_argument("--app", type=str, metavar="APP_NUMBER",
                         help="Enrich a specific application number")
+    parser.add_argument("--workers", type=int, default=2,
+                        help="Parallel browser sessions for --enrich (default 2)")
 
     args = parser.parse_args()
 
