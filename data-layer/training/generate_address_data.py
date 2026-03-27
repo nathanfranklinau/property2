@@ -443,7 +443,7 @@ def stream_gnaf(
     yield from all_records
 
 
-_TRAINING_TOTAL = 300_000
+_TRAINING_TOTAL = 1_000_000
 
 # Per-dimension coverage: ensures every authority table value appears in the dataset.
 # (label, partition_col, extra_where, n_per_type)
