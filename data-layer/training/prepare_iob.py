@@ -21,10 +21,13 @@ import argparse
 import json
 import logging
 import re
+import shutil
 from pathlib import Path
 
 import pandas as pd
-from datasets import Dataset, DatasetDict
+import pyarrow as pa
+import pyarrow.parquet as pq
+from datasets import DatasetDict, load_dataset
 from transformers import AutoTokenizer
 
 log = logging.getLogger(__name__)
@@ -242,6 +245,32 @@ def _process_batch(batch: pd.DataFrame, tokenizer) -> list[dict]:
     return results
 
 
+# ── Shard writer ──────────────────────────────────────────────────────────────
+
+_SHARD_SCHEMA = pa.schema([
+    pa.field("input_ids", pa.list_(pa.int32())),
+    pa.field("attention_mask", pa.list_(pa.int8())),
+    pa.field("labels", pa.list_(pa.int32())),
+])
+
+SHARD_SIZE = 500_000  # examples per parquet shard
+
+
+def _flush_shard(shard_dir: Path, shard_idx: int, examples: list[dict]) -> None:
+    table = pa.table(
+        {
+            "input_ids": [e["input_ids"] for e in examples],
+            "attention_mask": [e["attention_mask"] for e in examples],
+            "labels": [e["labels"] for e in examples],
+        },
+        schema=_SHARD_SCHEMA,
+    )
+    path = shard_dir / f"shard_{shard_idx:04d}.parquet"
+    pq.write_table(table, path)
+    mb = path.stat().st_size / 1_000_000
+    log.info(f"  → Shard {shard_idx} written: {len(examples):,} examples ({mb:.0f} MB)")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
@@ -300,42 +329,66 @@ def main() -> None:
     log.info(f"Loading tokenizer: {TOKENIZER_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
+    output_dir = Path(args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write examples to parquet shards as we go — avoids accumulating 9M+
+    # Python dicts in memory before the HuggingFace Dataset conversion.
+    shard_dir = output_dir / "shards"
+    shard_dir.mkdir(exist_ok=True)
+
     log.info("Aligning fields and tokenizing...")
-    all_examples: list[dict] = []
     n_batches = (len(df) + args.batch_size - 1) // args.batch_size
+    shard_buf: list[dict] = []
+    shard_idx = 0
+    total_examples = 0
 
     for i in range(n_batches):
         batch = df.iloc[i * args.batch_size : (i + 1) * args.batch_size]
         examples = _process_batch(batch, tokenizer)
-        all_examples.extend(examples)
+        shard_buf.extend(examples)
+        total_examples += len(examples)
+
+        if len(shard_buf) >= SHARD_SIZE:
+            _flush_shard(shard_dir, shard_idx, shard_buf)
+            shard_idx += 1
+            shard_buf = []
 
         if (i + 1) % 10 == 0 or (i + 1) == n_batches:
             log.info(
                 f"  Batch {i + 1}/{n_batches} "
                 f"({100 * (i + 1) / n_batches:.0f}%) — "
-                f"{len(all_examples):,} valid examples"
+                f"{total_examples:,} valid examples"
             )
 
-    skip_rate = 100 * (1 - len(all_examples) / len(df))
+    # Flush remaining examples.
+    if shard_buf:
+        _flush_shard(shard_dir, shard_idx, shard_buf)
+
+    skip_rate = 100 * (1 - total_examples / len(df))
     log.info(
-        f"Prepared {len(all_examples):,} examples "
+        f"Prepared {total_examples:,} examples "
         f"({skip_rate:.1f}% rows skipped due to alignment failures)"
     )
 
-    log.info("Building HuggingFace DatasetDict (95% train / 5% validation)...")
-    dataset = Dataset.from_list(all_examples)
+    # Load all shards into a HuggingFace Dataset (memory-mapped Arrow, no RAM spike).
+    log.info("Loading shards into HuggingFace Dataset...")
+    shard_files = sorted(str(p) for p in shard_dir.glob("shard_*.parquet"))
+    dataset = load_dataset("parquet", data_files=shard_files, split="train")
+
+    log.info("Splitting 95% train / 5% validation...")
     splits = dataset.train_test_split(test_size=0.05, seed=42)
     dataset_dict = DatasetDict({"train": splits["train"], "validation": splits["test"]})
 
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
     dataset_dict.save_to_disk(str(output_dir))
     log.info(f"Dataset saved to {output_dir}")
     log.info(f"  train:      {len(dataset_dict['train']):,} examples")
     log.info(f"  validation: {len(dataset_dict['validation']):,} examples")
 
-    # Save label config alongside the dataset so train.py and address_parser.py
-    # don't need to re-derive it.
+    # Remove shards now that the DatasetDict is saved.
+    shutil.rmtree(shard_dir)
+    log.info("Shards cleaned up.")
+
     label_config = {
         "label_names": LABEL_NAMES,
         "label_to_id": LABEL_TO_ID,
