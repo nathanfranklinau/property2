@@ -2,8 +2,10 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 17.5 (Homebrew)
--- Dumped by pg_dump version 17.5
+\restrict ErQFxJ9uUdApVPaDmPhoQUjCc9KPRcGi3xXgjhponAxfzkoXKvBDs2fOV6CRDrp
+
+-- Dumped from database version 17.9 (Homebrew)
+-- Dumped by pg_dump version 17.9 (Homebrew)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -92,6 +94,249 @@ CREATE SEQUENCE public.address_validation_cache_id_seq
 --
 
 ALTER SEQUENCE public.address_validation_cache_id_seq OWNED BY public.address_validation_cache.id;
+
+
+--
+-- Name: gnaf_data_address_default_geocode; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_address_default_geocode (
+    address_default_geocode_pid character varying(15) NOT NULL,
+    date_created date NOT NULL,
+    date_retired date,
+    address_detail_pid character varying(15) NOT NULL,
+    geocode_type_code character varying(4) NOT NULL,
+    longitude numeric(11,8),
+    latitude numeric(10,8),
+    geometry public.geometry(Point,7844)
+);
+
+
+--
+-- Name: gnaf_data_address_detail; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_address_detail (
+    address_detail_pid character varying(15) NOT NULL,
+    date_created date NOT NULL,
+    date_last_modified date,
+    date_retired date,
+    building_name character varying(200),
+    lot_number_prefix character varying(2),
+    lot_number character varying(5),
+    lot_number_suffix character varying(2),
+    flat_type_code character varying(7),
+    flat_number_prefix character varying(2),
+    flat_number numeric(5,0),
+    flat_number_suffix character varying(2),
+    level_type_code character varying(4),
+    level_number_prefix character varying(2),
+    level_number numeric(3,0),
+    level_number_suffix character varying(2),
+    number_first_prefix character varying(3),
+    number_first numeric(6,0),
+    number_first_suffix character varying(2),
+    number_last_prefix character varying(3),
+    number_last numeric(6,0),
+    number_last_suffix character varying(2),
+    street_locality_pid character varying(15),
+    location_description character varying(45),
+    locality_pid character varying(15) NOT NULL,
+    alias_principal character(1),
+    postcode character varying(4),
+    private_street character varying(75),
+    legal_parcel_id character varying(20),
+    confidence numeric(1,0),
+    address_site_pid character varying(15) NOT NULL,
+    level_geocoded_code numeric(2,0) NOT NULL,
+    property_pid character varying(15),
+    gnaf_property_pid character varying(15),
+    primary_secondary character varying(1)
+);
+
+
+--
+-- Name: gnaf_data_flat_type_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_flat_type_aut (
+    code character varying(7) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(30)
+);
+
+
+--
+-- Name: gnaf_data_geocode_type_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_geocode_type_aut (
+    code character varying(4) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(250)
+);
+
+
+--
+-- Name: gnaf_data_geocoded_level_type_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_geocoded_level_type_aut (
+    code numeric(2,0) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(70)
+);
+
+
+--
+-- Name: gnaf_data_level_type_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_level_type_aut (
+    code character varying(4) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(30)
+);
+
+
+--
+-- Name: gnaf_data_locality; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_locality (
+    locality_pid character varying(15) NOT NULL,
+    date_created date NOT NULL,
+    date_retired date,
+    locality_name character varying(100) NOT NULL,
+    primary_postcode character varying(4),
+    locality_class_code character(1) NOT NULL,
+    state_pid character varying(15) NOT NULL,
+    gnaf_locality_pid character varying(15),
+    gnaf_reliability_code numeric(1,0) NOT NULL
+);
+
+
+--
+-- Name: gnaf_data_state; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_state (
+    state_pid character varying(15) NOT NULL,
+    date_created date NOT NULL,
+    date_retired date,
+    state_name character varying(50) NOT NULL,
+    state_abbreviation character varying(3) NOT NULL
+);
+
+
+--
+-- Name: gnaf_data_street_class_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_street_class_aut (
+    code character(1) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(200)
+);
+
+
+--
+-- Name: gnaf_data_street_locality; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_street_locality (
+    street_locality_pid character varying(15) NOT NULL,
+    date_created date NOT NULL,
+    date_retired date,
+    street_class_code character(1) NOT NULL,
+    street_name character varying(100) NOT NULL,
+    street_type_code character varying(15),
+    street_suffix_code character varying(15),
+    locality_pid character varying(15) NOT NULL,
+    gnaf_street_pid character varying(15),
+    gnaf_street_confidence numeric(1,0),
+    gnaf_reliability_code numeric(1,0) NOT NULL
+);
+
+
+--
+-- Name: gnaf_data_street_suffix_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_street_suffix_aut (
+    code character varying(15) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(30)
+);
+
+
+--
+-- Name: gnaf_data_street_type_aut; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gnaf_data_street_type_aut (
+    code character varying(15) NOT NULL,
+    name character varying(50) NOT NULL,
+    description character varying(15)
+);
+
+
+--
+-- Name: address_view; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.address_view AS
+ SELECT ad.address_detail_pid,
+    ad.street_locality_pid,
+    ad.locality_pid,
+    ad.building_name,
+    ad.lot_number_prefix,
+    ad.lot_number,
+    ad.lot_number_suffix,
+    fta.name AS flat_type,
+    ad.flat_number_prefix,
+    ad.flat_number,
+    ad.flat_number_suffix,
+    lta.name AS level_type,
+    ad.level_number_prefix,
+    ad.level_number,
+    ad.level_number_suffix,
+    ad.number_first_prefix,
+    ad.number_first,
+    ad.number_first_suffix,
+    ad.number_last_prefix,
+    ad.number_last,
+    ad.number_last_suffix,
+    sl.street_name,
+    sl.street_class_code,
+    sca.name AS street_class_type,
+    sl.street_type_code,
+    sl.street_suffix_code,
+    ssa.name AS street_suffix_type,
+    l.locality_name,
+    st.state_abbreviation,
+    ad.postcode,
+    adg.latitude,
+    adg.longitude,
+    gta.name AS geocode_type,
+    ad.confidence,
+    ad.alias_principal,
+    ad.primary_secondary,
+    ad.legal_parcel_id,
+    ad.date_created
+   FROM (((((((((((public.gnaf_data_address_detail ad
+     LEFT JOIN public.gnaf_data_flat_type_aut fta ON (((ad.flat_type_code)::text = (fta.code)::text)))
+     LEFT JOIN public.gnaf_data_level_type_aut lta ON (((ad.level_type_code)::text = (lta.code)::text)))
+     JOIN public.gnaf_data_street_locality sl ON (((ad.street_locality_pid)::text = (sl.street_locality_pid)::text)))
+     LEFT JOIN public.gnaf_data_street_suffix_aut ssa ON (((sl.street_suffix_code)::text = (ssa.code)::text)))
+     LEFT JOIN public.gnaf_data_street_class_aut sca ON ((sl.street_class_code = sca.code)))
+     LEFT JOIN public.gnaf_data_street_type_aut sta ON (((sl.street_type_code)::text = (sta.code)::text)))
+     JOIN public.gnaf_data_locality l ON (((ad.locality_pid)::text = (l.locality_pid)::text)))
+     JOIN public.gnaf_data_address_default_geocode adg ON (((ad.address_detail_pid)::text = (adg.address_detail_pid)::text)))
+     LEFT JOIN public.gnaf_data_geocode_type_aut gta ON (((adg.geocode_type_code)::text = (gta.code)::text)))
+     LEFT JOIN public.gnaf_data_geocoded_level_type_aut glta ON ((ad.level_geocoded_code = glta.code)))
+     JOIN public.gnaf_data_state st ON (((l.state_pid)::text = (st.state_pid)::text)))
+  WHERE (ad.confidence > ('-1'::integer)::numeric);
 
 
 --
@@ -237,6 +482,99 @@ ALTER SEQUENCE public.admin_wards_id_seq OWNED BY public.gnaf_admin_wards.id;
 
 
 --
+-- Name: brisbane_da_properties; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brisbane_da_properties (
+    id integer NOT NULL,
+    application_number text NOT NULL,
+    land_number text,
+    lot_on_plan text,
+    suburb text,
+    location_address text,
+    street_number text,
+    street_name text,
+    street_type text,
+    unit_type text,
+    unit_number text,
+    unit_suffix text,
+    postcode text,
+    cadastre_lotplan text,
+    is_primary boolean DEFAULT false NOT NULL,
+    cadastre_suburb text
+);
+
+
+--
+-- Name: brisbane_da_properties_new_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.brisbane_da_properties_new_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: brisbane_da_properties_new_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.brisbane_da_properties_new_id_seq OWNED BY public.brisbane_da_properties.id;
+
+
+--
+-- Name: brisbane_dev_applications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.brisbane_dev_applications (
+    application_number text NOT NULL,
+    description text,
+    application_type text,
+    application_group text,
+    lodgement_date date,
+    status text,
+    decision text,
+    suburb text,
+    location_address text,
+    street_number text,
+    street_name text,
+    street_type text,
+    unit_type text,
+    unit_number text,
+    unit_suffix text,
+    postcode text,
+    assessment_level text,
+    use_categories text,
+    applicant text,
+    consultant text,
+    assessment_officer text,
+    appeal_result text,
+    record_creation_date date,
+    commence_confirmation_date date,
+    properly_made_date date,
+    action_notice_response_date date,
+    confirmation_notice_sent_date date,
+    info_request_sent_date date,
+    final_response_received_date date,
+    public_notification_date date,
+    decision_notice_date date,
+    development_category text,
+    dwelling_type text,
+    unit_count integer,
+    lot_split_from integer,
+    lot_split_to integer,
+    monitoring_status text DEFAULT 'active'::text,
+    status_changed_at timestamp with time zone,
+    first_scraped_at timestamp with time zone DEFAULT now(),
+    last_scraped_at timestamp with time zone DEFAULT now(),
+    detail_scraped_at timestamp with time zone
+);
+
+
+--
 -- Name: gnaf_data_address_alias; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -270,65 +608,6 @@ CREATE TABLE public.gnaf_data_address_change_type_aut (
     code character varying(50) NOT NULL,
     name character varying(100) NOT NULL,
     description character varying(500)
-);
-
-
---
--- Name: gnaf_data_address_default_geocode; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_address_default_geocode (
-    address_default_geocode_pid character varying(15) NOT NULL,
-    date_created date NOT NULL,
-    date_retired date,
-    address_detail_pid character varying(15) NOT NULL,
-    geocode_type_code character varying(4) NOT NULL,
-    longitude numeric(11,8),
-    latitude numeric(10,8),
-    geometry public.geometry(Point,7844)
-);
-
-
---
--- Name: gnaf_data_address_detail; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_address_detail (
-    address_detail_pid character varying(15) NOT NULL,
-    date_created date NOT NULL,
-    date_last_modified date,
-    date_retired date,
-    building_name character varying(200),
-    lot_number_prefix character varying(2),
-    lot_number character varying(5),
-    lot_number_suffix character varying(2),
-    flat_type_code character varying(7),
-    flat_number_prefix character varying(2),
-    flat_number numeric(5,0),
-    flat_number_suffix character varying(2),
-    level_type_code character varying(4),
-    level_number_prefix character varying(2),
-    level_number numeric(3,0),
-    level_number_suffix character varying(2),
-    number_first_prefix character varying(3),
-    number_first numeric(6,0),
-    number_first_suffix character varying(2),
-    number_last_prefix character varying(3),
-    number_last numeric(6,0),
-    number_last_suffix character varying(2),
-    street_locality_pid character varying(15),
-    location_description character varying(45),
-    locality_pid character varying(15) NOT NULL,
-    alias_principal character(1),
-    postcode character varying(4),
-    private_street character varying(75),
-    legal_parcel_id character varying(20),
-    confidence numeric(1,0),
-    address_site_pid character varying(15) NOT NULL,
-    level_geocoded_code numeric(2,0) NOT NULL,
-    property_pid character varying(15),
-    gnaf_property_pid character varying(15),
-    primary_secondary character varying(1)
 );
 
 
@@ -421,17 +700,6 @@ CREATE TABLE public.gnaf_data_address_type_aut (
 
 
 --
--- Name: gnaf_data_flat_type_aut; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_flat_type_aut (
-    code character varying(7) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(30)
-);
-
-
---
 -- Name: gnaf_data_geocode_reliability_aut; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -439,56 +707,6 @@ CREATE TABLE public.gnaf_data_geocode_reliability_aut (
     code numeric(1,0) NOT NULL,
     name character varying(50) NOT NULL,
     description character varying(100)
-);
-
-
---
--- Name: gnaf_data_geocode_type_aut; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_geocode_type_aut (
-    code character varying(4) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(250)
-);
-
-
---
--- Name: gnaf_data_geocoded_level_type_aut; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_geocoded_level_type_aut (
-    code numeric(2,0) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(70)
-);
-
-
---
--- Name: gnaf_data_level_type_aut; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_level_type_aut (
-    code character varying(4) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(30)
-);
-
-
---
--- Name: gnaf_data_locality; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_locality (
-    locality_pid character varying(15) NOT NULL,
-    date_created date NOT NULL,
-    date_retired date,
-    locality_name character varying(100) NOT NULL,
-    primary_postcode character varying(4),
-    locality_class_code character(1) NOT NULL,
-    state_pid character varying(15) NOT NULL,
-    gnaf_locality_pid character varying(15),
-    gnaf_reliability_code numeric(1,0) NOT NULL
 );
 
 
@@ -620,49 +838,6 @@ CREATE TABLE public.gnaf_data_ps_join_type_aut (
 
 
 --
--- Name: gnaf_data_state; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_state (
-    state_pid character varying(15) NOT NULL,
-    date_created date NOT NULL,
-    date_retired date,
-    state_name character varying(50) NOT NULL,
-    state_abbreviation character varying(3) NOT NULL
-);
-
-
---
--- Name: gnaf_data_street_class_aut; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_street_class_aut (
-    code character(1) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(200)
-);
-
-
---
--- Name: gnaf_data_street_locality; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.gnaf_data_street_locality (
-    street_locality_pid character varying(15) NOT NULL,
-    date_created date NOT NULL,
-    date_retired date,
-    street_class_code character(1) NOT NULL,
-    street_name character varying(100) NOT NULL,
-    street_type_code character varying(15),
-    street_suffix_code character varying(15),
-    locality_pid character varying(15) NOT NULL,
-    gnaf_street_pid character varying(15),
-    gnaf_street_confidence numeric(1,0),
-    gnaf_reliability_code numeric(1,0) NOT NULL
-);
-
-
---
 -- Name: gnaf_data_street_locality_alias; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -706,25 +881,47 @@ CREATE TABLE public.gnaf_data_street_locality_point (
 
 
 --
--- Name: gnaf_data_street_suffix_aut; Type: TABLE; Schema: public; Owner: -
+-- Name: goldcoast_da_properties; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.gnaf_data_street_suffix_aut (
-    code character varying(15) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(30)
+CREATE TABLE public.goldcoast_da_properties (
+    id integer NOT NULL,
+    application_number text NOT NULL,
+    lot_on_plan text,
+    suburb text,
+    location_address text,
+    cadastre_lotplan text,
+    is_primary boolean DEFAULT false NOT NULL,
+    cadastre_suburb text,
+    street_number text,
+    street_name text,
+    street_type text,
+    unit_type text,
+    unit_number text,
+    unit_suffix text,
+    portal_suburb text,
+    state text DEFAULT 'QLD'::text NOT NULL
 );
 
 
 --
--- Name: gnaf_data_street_type_aut; Type: TABLE; Schema: public; Owner: -
+-- Name: goldcoast_da_properties_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.gnaf_data_street_type_aut (
-    code character varying(15) NOT NULL,
-    name character varying(50) NOT NULL,
-    description character varying(15)
-);
+CREATE SEQUENCE public.goldcoast_da_properties_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: goldcoast_da_properties_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.goldcoast_da_properties_id_seq OWNED BY public.goldcoast_da_properties.id;
 
 
 --
@@ -739,7 +936,6 @@ CREATE TABLE public.goldcoast_dev_applications (
     status text,
     suburb text,
     location_address text,
-    lot_on_plan text,
     pre_assessment_started date,
     pre_assessment_completed date,
     confirmation_notice_started date,
@@ -764,13 +960,21 @@ CREATE TABLE public.goldcoast_dev_applications (
     issue_decision_completed date,
     appeal_period_started date,
     appeal_period_completed date,
-    lot_plan text GENERATED ALWAYS AS (replace(regexp_replace(lot_on_plan, '(?i)^.*lot\s+'::text, ''::text), ' '::text, ''::text)) STORED,
     development_category text,
     dwelling_type text,
     unit_count integer,
     lot_split_from integer,
     lot_split_to integer,
-    assessment_level text
+    assessment_level text,
+    street_number text,
+    street_name text,
+    street_type text,
+    unit_type text,
+    unit_number text,
+    unit_suffix text,
+    postcode text,
+    cadastre_suburb text,
+    cadastre_lotplan text
 );
 
 
@@ -838,8 +1042,8 @@ CREATE TABLE public.property_analysis (
     boundary_coords_gda94 jsonb,
     centroid_lat double precision,
     centroid_lon double precision,
-    CONSTRAINT property_analysis_analysis_status_check CHECK (((analysis_status)::text = ANY ((ARRAY['pending'::character varying, 'detecting'::character varying, 'complete'::character varying, 'failed'::character varying])::text[]))),
-    CONSTRAINT property_analysis_image_status_check CHECK (((image_status)::text = ANY ((ARRAY['pending'::character varying, 'downloading'::character varying, 'complete'::character varying, 'failed'::character varying])::text[])))
+    CONSTRAINT property_analysis_analysis_status_check CHECK (((analysis_status)::text = ANY (ARRAY[('pending'::character varying)::text, ('detecting'::character varying)::text, ('complete'::character varying)::text, ('failed'::character varying)::text]))),
+    CONSTRAINT property_analysis_image_status_check CHECK (((image_status)::text = ANY (ARRAY[('pending'::character varying)::text, ('downloading'::character varying)::text, ('complete'::character varying)::text, ('failed'::character varying)::text])))
 );
 
 
@@ -1613,6 +1817,13 @@ ALTER TABLE ONLY public.address_validation_cache ALTER COLUMN id SET DEFAULT nex
 
 
 --
+-- Name: brisbane_da_properties id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brisbane_da_properties ALTER COLUMN id SET DEFAULT nextval('public.brisbane_da_properties_new_id_seq'::regclass);
+
+
+--
 -- Name: gnaf_admin_lga id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -1638,6 +1849,13 @@ ALTER TABLE ONLY public.gnaf_admin_state_boundaries ALTER COLUMN id SET DEFAULT 
 --
 
 ALTER TABLE ONLY public.gnaf_admin_wards ALTER COLUMN id SET DEFAULT nextval('public.admin_wards_id_seq'::regclass);
+
+
+--
+-- Name: goldcoast_da_properties id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.goldcoast_da_properties ALTER COLUMN id SET DEFAULT nextval('public.goldcoast_da_properties_id_seq'::regclass);
 
 
 --
@@ -1826,6 +2044,22 @@ ALTER TABLE ONLY public.gnaf_admin_state_boundaries
 
 ALTER TABLE ONLY public.gnaf_admin_wards
     ADD CONSTRAINT admin_wards_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brisbane_da_properties brisbane_da_properties_new_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brisbane_da_properties
+    ADD CONSTRAINT brisbane_da_properties_new_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: brisbane_dev_applications brisbane_dev_applications_new_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brisbane_dev_applications
+    ADD CONSTRAINT brisbane_dev_applications_new_pkey PRIMARY KEY (application_number);
 
 
 --
@@ -2109,6 +2343,14 @@ ALTER TABLE ONLY public.gnaf_data_street_type_aut
 
 
 --
+-- Name: goldcoast_da_properties goldcoast_da_properties_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.goldcoast_da_properties
+    ADD CONSTRAINT goldcoast_da_properties_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: goldcoast_dev_applications goldcoast_dev_applications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2324,6 +2566,97 @@ CREATE INDEX idx_address_validation_cache_queried_at ON public.address_validatio
 
 
 --
+-- Name: idx_bne_da_application_group; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_application_group ON public.brisbane_dev_applications USING btree (application_group);
+
+
+--
+-- Name: idx_bne_da_application_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_application_type ON public.brisbane_dev_applications USING btree (application_type);
+
+
+--
+-- Name: idx_bne_da_assessment_level; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_assessment_level ON public.brisbane_dev_applications USING btree (assessment_level);
+
+
+--
+-- Name: idx_bne_da_development_category; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_development_category ON public.brisbane_dev_applications USING btree (development_category);
+
+
+--
+-- Name: idx_bne_da_lodgement_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_lodgement_date ON public.brisbane_dev_applications USING btree (lodgement_date);
+
+
+--
+-- Name: idx_bne_da_monitoring_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_monitoring_status ON public.brisbane_dev_applications USING btree (monitoring_status) WHERE (monitoring_status = 'active'::text);
+
+
+--
+-- Name: idx_bne_da_properties_app_num; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_properties_app_num ON public.brisbane_da_properties USING btree (application_number);
+
+
+--
+-- Name: idx_bne_da_properties_cadastre; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_properties_cadastre ON public.brisbane_da_properties USING btree (cadastre_lotplan) WHERE (cadastre_lotplan IS NOT NULL);
+
+
+--
+-- Name: idx_bne_da_properties_land_num; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_properties_land_num ON public.brisbane_da_properties USING btree (land_number) WHERE (land_number IS NOT NULL);
+
+
+--
+-- Name: idx_bne_da_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_status ON public.brisbane_dev_applications USING btree (status);
+
+
+--
+-- Name: idx_bne_da_suburb; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_bne_da_suburb ON public.brisbane_dev_applications USING btree (suburb);
+
+
+--
+-- Name: idx_da_properties_app_num; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_da_properties_app_num ON public.goldcoast_da_properties USING btree (application_number);
+
+
+--
+-- Name: idx_da_properties_cadastre; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_da_properties_cadastre ON public.goldcoast_da_properties USING btree (cadastre_lotplan) WHERE (cadastre_lotplan IS NOT NULL);
+
+
+--
 -- Name: idx_gc_da_application_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2335,6 +2668,13 @@ CREATE INDEX idx_gc_da_application_type ON public.goldcoast_dev_applications USI
 --
 
 CREATE INDEX idx_gc_da_assessment_level ON public.goldcoast_dev_applications USING btree (assessment_level);
+
+
+--
+-- Name: idx_gc_da_cadastre_lotplan; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gc_da_cadastre_lotplan ON public.goldcoast_dev_applications USING btree (cadastre_lotplan) WHERE (cadastre_lotplan IS NOT NULL);
 
 
 --
@@ -2363,20 +2703,6 @@ CREATE INDEX idx_gc_da_epathway_id ON public.goldcoast_dev_applications USING bt
 --
 
 CREATE INDEX idx_gc_da_lodgement_date ON public.goldcoast_dev_applications USING btree (lodgement_date);
-
-
---
--- Name: idx_gc_da_lot_on_plan; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_gc_da_lot_on_plan ON public.goldcoast_dev_applications USING btree (lot_on_plan);
-
-
---
--- Name: idx_gc_da_lot_plan; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_gc_da_lot_plan ON public.goldcoast_dev_applications USING btree (lot_plan);
 
 
 --
@@ -2772,6 +3098,22 @@ CREATE INDEX idx_qld_zones_geometry ON public.qld_planning_zones USING gist (geo
 
 
 --
+-- Name: brisbane_da_properties brisbane_da_properties_application_number_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.brisbane_da_properties
+    ADD CONSTRAINT brisbane_da_properties_application_number_fkey FOREIGN KEY (application_number) REFERENCES public.brisbane_dev_applications(application_number) ON DELETE CASCADE;
+
+
+--
+-- Name: goldcoast_da_properties goldcoast_da_properties_application_number_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.goldcoast_da_properties
+    ADD CONSTRAINT goldcoast_da_properties_application_number_fkey FOREIGN KEY (application_number) REFERENCES public.goldcoast_dev_applications(application_number) ON DELETE CASCADE;
+
+
+--
 -- Name: property_analysis property_analysis_parcel_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2782,4 +3124,6 @@ ALTER TABLE ONLY public.property_analysis
 --
 -- PostgreSQL database dump complete
 --
+
+\unrestrict ErQFxJ9uUdApVPaDmPhoQUjCc9KPRcGi3xXgjhponAxfzkoXKvBDs2fOV6CRDrp
 
