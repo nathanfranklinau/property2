@@ -41,7 +41,7 @@ _ADDRESS_MODEL_DIR = os.getenv("ADDRESS_MODEL_DIR", "training/model")
 async def lifespan(app: FastAPI):
     log.info("Analysis service starting...")
     model_path = Path(_ADDRESS_MODEL_DIR)
-    if model_path.exists():
+    if (model_path / "config.json").exists():
         app.state.address_parser = AddressParser(_ADDRESS_MODEL_DIR)
     else:
         app.state.address_parser = None
