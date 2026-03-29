@@ -273,6 +273,31 @@ def parse_description(description: str | None, application_type: str | None) -> 
 
 # ── Cadastre resolution ──────────────────────────────────────────────────────
 
+# Matches bare lot/plan references in a location_address field, e.g.:
+#   "Lot 9 SP180076"  → lot="9",  plan="SP180076"
+#   "Lot 9A SP180076" → lot="9A", plan="SP180076"
+#   "9 SP180076"      → lot="9",  plan="SP180076"
+# Does NOT match street addresses ("41 Smith Street MIAMI") because the plan
+# segment requires 2+ uppercase letters followed by 4+ digits.
+_LOT_PLAN_RE = re.compile(
+    r"(?i)^\s*(?:Lot\s+)?(\w+)\s+([A-Z]{2,}\d{4,})\b"
+)
+
+
+def extract_lot_plan_from_location_address(address: str | None) -> str | None:
+    """Extract a normalised lot+plan string from a location_address field.
+
+    Returns e.g. "9SP180076" when address is "Lot 9 SP180076", or None when
+    the address is a street address or cannot be parsed as a lot reference.
+    """
+    if not address:
+        return None
+    m = _LOT_PLAN_RE.match(address.strip())
+    if not m:
+        return None
+    return m.group(1) + m.group(2).upper()
+
+
 def resolve_cadastre_lotplan(conn: psycopg2.extensions.connection, lot_plan: str) -> str | None:
     """Resolve a DA lot_plan to the matching lotplan in qld_cadastre_parcels.
 
@@ -357,142 +382,16 @@ def lookup_cadastre_suburb(cur: psycopg2.extensions.cursor, cadastre_lp: str) ->
     return row[0] if row else None
 
 
-# ── Address parsing ──────────────────────────────────────────────────────────
-
-_STREET_TYPES = {
-    "ALLEY", "APPROACH", "ARCADE", "AVENUE", "BOULEVARD", "BRACE",
-    "BYPASS", "CAUSEWAY", "CIRCUIT", "CIRCUS", "CLOSE", "CONCOURSE",
-    "CORNER", "COURT", "COVE", "CRESCENT", "CREST", "DRIVE",
-    "ESPLANADE", "FAIRWAY", "FREEWAY", "FRONTAGE", "GLADE", "GLEN",
-    "GROVE", "GULLY", "HEIGHTS", "HIGHWAY", "ISLAND", "JUNCTION",
-    "LANE", "LINK", "LOOP", "MEWS", "MOTORWAY", "NOOK", "OUTLOOK",
-    "PARADE", "PARKWAY", "PASS", "PATHWAY", "PLACE", "PLAZA",
-    "PROMENADE", "RAMBLE", "RETREAT", "RIDGE", "RISE", "ROAD",
-    "ROUTE", "ROW", "RUN", "SQUARE", "STREET", "STRIP", "TERRACE",
-    "TRACK", "TRAIL", "VALE", "VIEW", "VISTA", "WALK", "WAY", "WHARF",
-}
-
-# Unit prefix: "UNIT 4, " / "SHOP 3A, " / "FLAT 2, "
-_RE_UNIT_PREFIX = re.compile(
-    r"^(UNIT|SHOP|FLAT|SUITE|VILLA|APT|APARTMENT)\s+(\d+\w*)\s*,\s*",
-    re.IGNORECASE,
-)
-
-# Leading lot qualifiers seen in ePathway: BAL, PT1, PT2, P01 etc.
-_RE_LOT_QUALIFIER = re.compile(r"^(?:BAL|PT\d+|P\d+)\s+", re.IGNORECASE)
-
-# Lot + plan code (e.g. "Lot 255 WD5121, "): 1–5 letters followed by digits covers all 400+
-# QLD plan type prefixes (SP, RP, BUP, GTP, WD, MPH, …) without an explicit list.
-_RE_LOT_PLAN = re.compile(r"\bLot\s+\d{1,5}\s+[A-Z]{1,5}\d+,?\s*", re.IGNORECASE)
-
-# Bare "Lot N" remaining after plan code has been stripped
-_RE_BARE_LOT = re.compile(r"^Lot\s+\d+\s*", re.IGNORECASE)
-
-
-def _prepare_address(raw: str) -> str:
-    """Strip cadastral lot references from an ePathway address string.
-
-    Leaves a clean street address ready for parsing. Applied in order:
-      1. Strip leading qualifier tokens: BAL, PT1, PT2, P01 etc.
-      2. Strip all "Lot N PLAN_CODE" pairs (covers all QLD plan types via [A-Z]{1,5}\\d+).
-      3. Strip leading comma/whitespace left by step 2.
-      4. Strip any remaining bare "Lot N" prefix — the number is NOT preserved as a
-         street number (e.g. "Lot 47 Shipper Drive" → "Shipper Drive", unparseable).
-    """
-    text = _RE_LOT_QUALIFIER.sub("", raw).strip()
-    text = _RE_LOT_PLAN.sub("", text)
-    text = text.lstrip(", ").strip()
-    text = _RE_BARE_LOT.sub("", text).strip()
-    return text
-
-
-def _libpostal_parse(text: str) -> list[dict]:
-    """Call the pelias/libpostal-service REST API.
-
-    Returns a list of {"label": ..., "value": ...} dicts, identical in
-    structure to what the Python bindings return as (value, label) tuples.
-    Raises requests.HTTPError or requests.ConnectionError if the service
-    is unavailable.
-    """
-    import os
-    import requests as _requests
-    url = os.getenv("LIBPOSTAL_URL", "http://localhost:4400")
-    resp = _requests.get(f"{url}/parse", params={"address": text}, timeout=5)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def _split_road(road: str) -> tuple[str | None, str | None]:
-    """Split libpostal's combined 'road' field into (street_name, street_type).
-
-    Finds the last word that matches a known street type; everything before it
-    becomes the street name. Falls back to treating the last word as the type.
-    """
-    words = road.split()
-    type_idx = next(
-        (i for i in range(len(words) - 1, -1, -1) if words[i].upper() in _STREET_TYPES),
-        None,
-    )
-    if type_idx is not None:
-        street_type = words[type_idx].title()
-        street_name = " ".join(w.title() for w in words[:type_idx]) if type_idx > 0 else None
-    else:
-        street_type = words[-1].title() if words else None
-        street_name = " ".join(w.title() for w in words[:-1]) if len(words) > 1 else None
-    return street_name, street_type
-
 
 def parse_location_address(addr: str | None) -> ParsedAddress:
-    """Parse a free-text ePathway location address into structured fields.
+    """Parse a free-text location address into structured fields.
 
-    Strips cadastral lot references first (_prepare_address), then delegates
-    to the pelias/libpostal-service REST API for parsing. The service must be
-    running (see docker-compose.yml at project root).
-
-    Handles formats seen in ePathway summary and property section rows:
-      "2 River Terrace"
-      "UNIT 4, 19 Santa Barbara Road"
-      "Lot 255 WD5121, 55 Eden Avenue, COOLANGATTA QLD 4225"
-      "BAL Lot 1 RP215138, 82 Cabbage Tree Point Road"
-      "Lot 303 SP289809"              ← bare lot ref, returns all-None
+    Stub — returns all-None. Will be replaced with the DistilBERT address
+    parser once the model is trained. Parsed address columns will be backfilled
+    at that point.
     """
-    out: ParsedAddress = {
+    return {
         "unit_type": None, "unit_number": None, "unit_suffix": None,
         "street_number": None, "street_name": None, "street_type": None,
         "suburb": None, "postcode": None,
     }
-    if not addr:
-        return out
-
-    text = _prepare_address(addr.strip())
-    if not text:
-        return out  # bare lot ref, nothing parseable
-
-    # Extract unit_type before libpostal — libpostal drops type keywords (UNIT/SHOP/FLAT)
-    m = _RE_UNIT_PREFIX.match(text)
-    if m:
-        out["unit_type"] = m.group(1).upper()
-
-    for component in _libpostal_parse(text):
-        label = component["label"]
-        value = component["value"].strip()
-        if label == "house_number":
-            out["street_number"] = value
-        elif label == "unit":
-            # libpostal includes the type keyword in the value (e.g. "unit 4") — strip it
-            out["unit_number"] = re.sub(
-                r"^(UNIT|SHOP|FLAT|SUITE|VILLA|APT|APARTMENT)\s+",
-                "",
-                value,
-                flags=re.IGNORECASE,
-            )
-        elif label == "road":
-            out["street_name"], out["street_type"] = _split_road(value)
-        elif label in ("city", "suburb"):
-            # libpostal labels Australian suburbs as either "suburb" or "city" depending
-            # on how well-known the locality is — treat both the same
-            out["suburb"] = value.title()
-        elif label == "postcode":
-            out["postcode"] = value
-
-    return out

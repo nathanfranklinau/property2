@@ -65,6 +65,7 @@ from da_common import (
     parse_au_date,
     month_ranges,
     parse_description,
+    extract_lot_plan_from_location_address,
     resolve_cadastre_lotplan,
     lookup_cadastre_suburb as _lookup_cadastre_suburb,
     parse_location_address,
@@ -625,12 +626,14 @@ def upsert_summary(conn, records: list) -> int:
         INSERT INTO goldcoast_dev_applications
             (application_number, description, application_type,
              lodgement_date, status, suburb, location_address,
+             cadastre_lotplan,
              epathway_id, monitoring_status, last_scraped_at,
              street_number, street_name, street_type,
              unit_type, unit_number, unit_suffix, postcode)
         VALUES
             (%(application_number)s, %(description)s, %(application_type)s,
              %(lodgement_date)s, %(status)s, %(suburb)s, %(location_address)s,
+             %(cadastre_lotplan)s,
              %(epathway_id)s, %(monitoring_status)s, NOW(),
              %(street_number)s, %(street_name)s, %(street_type)s,
              %(unit_type)s, %(unit_number)s, %(unit_suffix)s, %(postcode)s)
@@ -641,6 +644,7 @@ def upsert_summary(conn, records: list) -> int:
             status           = EXCLUDED.status,
             suburb           = EXCLUDED.suburb,
             location_address = EXCLUDED.location_address,
+            cadastre_lotplan = EXCLUDED.cadastre_lotplan,
             epathway_id      = COALESCE(EXCLUDED.epathway_id, goldcoast_dev_applications.epathway_id),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
@@ -666,7 +670,10 @@ def upsert_summary(conn, records: list) -> int:
             continue
 
         status = rec.get("status")
-        parsed_addr = parse_location_address(rec.get("location_address"))
+        location_address = rec.get("location_address")
+        parsed_addr = parse_location_address(location_address)
+        raw_lot_plan = extract_lot_plan_from_location_address(location_address)
+        cadastre_lp = resolve_cadastre_lotplan(conn, raw_lot_plan) if raw_lot_plan else None
         params = {
             "application_number": app_num,
             "description": rec.get("description"),
@@ -674,7 +681,8 @@ def upsert_summary(conn, records: list) -> int:
             "lodgement_date": parse_au_date(rec.get("lodgement_date", "")),
             "status": status,
             "suburb": parsed_addr["suburb"],
-            "location_address": rec.get("location_address"),
+            "location_address": location_address,
+            "cadastre_lotplan": cadastre_lp,
             "epathway_id": rec.get("epathway_id"),
             "monitoring_status": _monitoring_status_for(status),
             "street_number": parsed_addr["street_number"],
@@ -724,6 +732,13 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         if col in detail and detail[col] is not None:
             sets.append(f"{col} = %({col})s")
             params[col] = detail[col]
+
+    # Resolve cadastre_lotplan from detail location_address if present
+    if "location_address" in detail and detail["location_address"]:
+        raw_lot_plan = extract_lot_plan_from_location_address(detail["location_address"])
+        cadastre_lp = resolve_cadastre_lotplan(conn, raw_lot_plan) if raw_lot_plan else None
+        sets.append("cadastre_lotplan = %(cadastre_lotplan)s")
+        params["cadastre_lotplan"] = cadastre_lp
 
     # Track when status changes
     if "status" in params:
