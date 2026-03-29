@@ -180,17 +180,21 @@ def _tokenize_and_align(
     )
 
     offset_mapping: list[tuple[int, int]] = encoding["offset_mapping"]
+    # Token strings needed to detect true WordPiece continuation subwords (## prefix).
+    # Adjacent punctuation tokens like "57", "/", "7" have no character gap but are NOT
+    # subwords — only tokens with "##" prefix should be masked with -100.
+    token_strings = tokenizer.convert_ids_to_tokens(encoding["input_ids"])
     labels: list[int] = []
     prev_end: int | None = None
 
-    for t_start, t_end in offset_mapping:
+    for i, (t_start, t_end) in enumerate(offset_mapping):
         if t_start == t_end:  # Special token.
             labels.append(-100)
             prev_end = None
             continue
 
-        # Continuation subword: offset immediately follows previous token with no gap.
-        if prev_end is not None and prev_end == t_start:
+        # True WordPiece continuation subword — suppress label.
+        if prev_end is not None and prev_end == t_start and token_strings[i].startswith("##"):
             labels.append(-100)
         else:
             label_str = char_label.get(t_start, "O")

@@ -76,18 +76,23 @@ class AddressParser:
 
         predictions: list[int] = torch.argmax(logits, dim=1).tolist()
 
+        # Token strings needed to detect true WordPiece continuation subwords (## prefix).
+        # Adjacent punctuation tokens like "57", "/", "7" have no character gap but are NOT
+        # subwords — only ## tokens should be merged into the preceding word.
+        token_strings = self._tokenizer.convert_ids_to_tokens(
+            encoding["input_ids"][0].tolist()
+        )
+
         # ── Decode: reconstruct word-level tokens with their labels ──────────
         # Only the first subword of each word carries a reliable label
         # (continuation subwords were masked with -100 during training).
-        # We detect continuations by checking whether the current token starts
-        # immediately where the previous one ended (no whitespace gap).
 
         words: list[tuple[str, str]] = []  # (word_text, label)
         current_text = ""
         current_label = "O"
         prev_end: int | None = None
 
-        for (t_start, t_end), pred_id in zip(offset_mapping, predictions):
+        for i, ((t_start, t_end), pred_id) in enumerate(zip(offset_mapping, predictions)):
             if t_start == t_end:  # Special token ([CLS], [SEP]).
                 # Flush any accumulated word.
                 if current_text:
@@ -98,13 +103,17 @@ class AddressParser:
                 continue
 
             token_text = normalised[t_start:t_end]
-            is_continuation = prev_end is not None and prev_end == t_start
+            is_continuation = (
+                prev_end is not None
+                and prev_end == t_start
+                and token_strings[i].startswith("##")
+            )
 
             if is_continuation:
-                # Subword continuation: append text, keep the first subword's label.
+                # WordPiece subword continuation: append text, keep the first subword's label.
                 current_text += token_text
             else:
-                # New word: flush previous word, start fresh.
+                # New word (or punctuation token): flush previous, start fresh.
                 if current_text:
                     words.append((current_text, current_label))
                 current_text = token_text
