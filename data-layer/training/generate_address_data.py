@@ -4,14 +4,14 @@ Extracts structured addresses from PostgreSQL, generates realistic human-typed
 permutations, and writes paired (input, label) rows to CSV or Parquet.
 
 Usage:
-    python training/generate_address_data.py \\
-        --output training/data/address_training.csv \\
-        --states QLD \\
-        --limit 100000 \\
-        --seed 42 \\
-        --max-perms 8 \\
-        --noisy \\
-        --parquet
+    sh run.sh training/generate_address_data.py \
+        --output training/data/address_training.csv \
+        --states QLD \
+        --limit 2000 \
+        --seed 42 \
+        --max-perms 40 \
+        --noisy \
+        --csv
 
 Run from data-layer/ directory.
 """
