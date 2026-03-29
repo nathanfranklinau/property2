@@ -1,139 +1,143 @@
 # Address Parser — Training Guide
 
-Fine-tunes `distilbert-base-uncased` on 2–3 M Australian address examples to produce a self-contained model used by the `POST /parse-address` API endpoint.
+Fine-tunes `distilbert-base-uncased` on Australian address examples to produce the model used by `POST /parse-address`.
 
-**Estimated time on RTX 3060 (12 GB):** ~3–5 hours total (data prep ~30 min + training ~3–4 hours).
-
----
-
-## Overview
-
-| Step | Script | Output |
-|------|--------|--------|
-| 1. Prepare IOB dataset | `prepare_iob.py` | `training/data/iob_dataset/` |
-| 2. Train model | `train.py` | `training/model/` |
-| 3. Serve | `service/main.py` | `POST /parse-address` |
+**Estimated time on RTX 3060 (12 GB):** ~1 hour generate + ~1 hour prepare + ~6–10 hours train.
 
 ---
 
-## Option A — Native (recommended for local GPU)
+## Prerequisites
 
-### Prerequisites
+- **Docker** with GPU support
+  - Linux: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+  - Windows: Docker Desktop + WSL2 backend + NVIDIA driver ≥ 527
+- **Python venv** at `data-layer/venv` (only needed for generate step — reads from DB)
+- **PostgreSQL** running with GNAF data loaded (only needed for generate step)
 
-- Python 3.11
-- CUDA 11.8+ on the host (`nvidia-smi` to check)
-- The existing `data-layer/venv`
-
-### 1. Install PyTorch with CUDA
-
-```bash
-cd data-layer
-venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cu118
-```
-
-Verify GPU is visible:
-```bash
-venv/bin/python -c "import torch; print(torch.cuda.get_device_name(0))"
-# Expected: NVIDIA GeForce RTX 3060
-```
-
-### 2. Install training dependencies
-
-```bash
-venv/bin/pip install -r training/requirements-training.txt
-```
-
-### 3. Prepare the IOB dataset
-
-Reads `training/data/address_training.parquet`, aligns field values to token spans,
-and saves a HuggingFace DatasetDict to `training/data/iob_dataset/`.
-
-```bash
-cd data-layer
-venv/bin/python -m training.prepare_iob
-```
-
-**Test run first (optional):** processes 50 000 rows in ~2 minutes to verify alignment is working before committing to the full run:
-
-```bash
-venv/bin/python -m training.prepare_iob --sample 50000
-```
-
-Expected output:
-```
-Total rows: 4,156,252
-After permutation filter: ~3,100,000 rows (excluded ~1,000,000 abbreviated-format rows)
-Prepared ~2,950,000 valid examples (skip rate ~5%)
-train:      2,802,000 examples
-validation:   148,000 examples
-```
-
-### 4. Train
-
-```bash
-venv/bin/python -m training.train
-```
-
-Checkpoints save to `training/model/` every 2 000 steps. Training resumes automatically from the last checkpoint if interrupted.
-
-**To resume after interruption:**
-```bash
-venv/bin/python -m training.train
-# Trainer detects the existing checkpoint directory and resumes.
-```
-
-**Custom options:**
-```bash
-venv/bin/python -m training.train --epochs 5 --batch-size 16 --lr 3e-5
-```
-
-Expected validation F1 after 3 epochs: **>0.97** on standard address formats.
+> **WSL2 users:** Run from the native Linux filesystem (`~/`), **not** from `/mnt/e/` or any Windows-mounted drive. Docker I/O through `/mnt/` is 3–5× slower due to the 9P bridge. Copy your working directory if needed:
+> ```bash
+> cp -r /mnt/e/Projects/property2/data-layer ~/property2/data-layer
+> cd ~/property2/data-layer
+> ```
 
 ---
 
-## Option B — Docker (alternative)
+## The Pipeline
 
-Useful if you don't want to modify the venv, or are running on a different machine.
+All steps are driven by a single script. Run from `data-layer/`:
 
-### Prerequisites
-
-- Docker with GPU support:
-  - **Linux:** [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-  - **Windows:** Docker Desktop with WSL2 backend + NVIDIA driver ≥ 527
-
-### Build the image
-
-```bash
-cd data-layer
-docker build -f training/Dockerfile.training -t address-parser-training .
+```
+bash training/run_docker_training.sh [STEPS] [OPTIONS]
 ```
 
-### Step 1 — Prepare IOB dataset
+| Step flag | What it does | Needs |
+|---|---|---|
+| `--generate-data` | Query GNAF → `address_training.parquet` | DB + venv |
+| `--build` | Build Docker image `address-parser-training` | Docker |
+| `--prepare` | Tokenise + IOB2-label parquet → `iob_dataset/` | Docker + parquet |
+| `--train` | Fine-tune DistilBERT → `training/model/` | Docker GPU + iob_dataset |
 
-```bash
-docker run --gpus all \
-  -v "$(pwd)/training/data:/app/training/data" \
-  address-parser-training \
-  python -m training.prepare_iob
-```
+Options:
 
-### Step 2 — Train
-
-```bash
-docker run --gpus all \
-  -v "$(pwd)/training/data:/app/training/data" \
-  -v "$(pwd)/training/model:/app/training/model" \
-  address-parser-training \
-  python -m training.train
-```
-
-On Windows (PowerShell), replace `$(pwd)` with `${PWD}`.
+| Option | Default | Description |
+|---|---|---|
+| `--states S` | `QLD` | Comma-separated states, e.g. `QLD,NSW` |
+| `--limit N` | all | Max GNAF addresses to process |
+| `--sample N` | all | Prepare IOB on N rows — fast smoke-test |
 
 ---
 
-## After Training
+## Step 1 — Generate training data
 
-The trained model lands at `data-layer/training/model/`. It contains:
+Queries GNAF from PostgreSQL and writes permuted address examples to a parquet file. Requires the DB to be running and the venv to have `psycopg2` installed.
+
+```bash
+bash training/run_docker_training.sh --generate-data
+```
+
+Output: `training/data/address_training.parquet` (~12M rows for QLD, ~2 GB)
+
+To limit scope during development:
+```bash
+bash training/run_docker_training.sh --generate-data --limit 500000
+```
+
+---
+
+## Step 2 — Build the Docker image
+
+Only needed once, or after changes to `Dockerfile.training` or `requirements-training.txt`.
+
+```bash
+bash training/run_docker_training.sh --build
+```
+
+---
+
+## Step 3 — Prepare IOB dataset
+
+Tokenises the parquet with the DistilBERT tokeniser and assigns IOB2 labels. Runs in Docker (CPU). Writes intermediate parquet shards to avoid OOM, then saves a HuggingFace DatasetDict.
+
+```bash
+bash training/run_docker_training.sh --prepare
+```
+
+Output: `training/data/iob_dataset/` (~9.3M examples, 3 train shards + 1 validation shard)
+
+**Expected output:**
+```
+Prepared 9,320,386 examples (7.0% rows skipped due to alignment failures)
+  train:      8,854,366 examples
+  validation:   466,020 examples
+```
+
+Smoke-test first on 50k rows (~2 min):
+```bash
+bash training/run_docker_training.sh --prepare --sample 50000
+```
+
+---
+
+## Step 4 — Train
+
+Fine-tunes DistilBERT on the IOB dataset. Requires a CUDA-capable GPU.
+
+```bash
+bash training/run_docker_training.sh --train
+```
+
+Output: `training/model/` (~260 MB)
+
+Training saves checkpoints every 2,000 steps. If interrupted, re-running `--train` resumes from the last checkpoint automatically.
+
+**Expected validation F1 after 3 epochs: > 0.97**
+
+---
+
+## Common combinations
+
+```bash
+# Everything from scratch:
+bash training/run_docker_training.sh --generate-data --build --prepare --train
+
+# Parquet already exists — build + prepare + train:
+bash training/run_docker_training.sh --build --prepare --train
+
+# Image already built, iob_dataset ready — just train:
+bash training/run_docker_training.sh --train
+
+# Rebuild image and retrain (iob_dataset unchanged):
+bash training/run_docker_training.sh --build --train
+
+# Smoke-test the full pipeline on 50k rows:
+bash training/run_docker_training.sh --build --prepare --train --sample 50000
+```
+
+---
+
+## After training
+
+The model lands at `data-layer/training/model/`:
 
 ```
 training/model/
@@ -142,23 +146,17 @@ training/model/
 ├── tokenizer.json
 ├── tokenizer_config.json
 ├── vocab.txt
-└── label_config.json      # field label ↔ id mappings
+└── label_config.json
 ```
 
-### Start the service
+Start the service:
 
 ```bash
 cd data-layer
 venv/bin/uvicorn service.main:app --port 8001 --reload
 ```
 
-The service loads the model at startup (CPU, ~2–3 s). You'll see:
-```
-INFO  Loading address parser from training/model
-INFO  Address parser ready.
-```
-
-### Test the endpoint
+The model loads at startup (CPU, ~2–3 s). Test it:
 
 ```bash
 curl -s -X POST http://localhost:8001/parse-address \
@@ -166,7 +164,7 @@ curl -s -X POST http://localhost:8001/parse-address \
   -d '{"address": "Unit 4, 35 Smallman Street, Bulimba QLD 4171"}' | python -m json.tool
 ```
 
-Expected response:
+Expected:
 ```json
 {
   "unit_type": "Unit",
@@ -175,33 +173,24 @@ Expected response:
   "street_name": "Smallman",
   "street_type": "Street",
   "suburb": "Bulimba",
-  "state": "Qld",
+  "state": "QLD",
   "postcode": "4171"
 }
 ```
 
----
-
-## Overriding the model path
-
-By default the service looks for the model at `training/model/` relative to the
-working directory. Override with the `ADDRESS_MODEL_DIR` environment variable:
-
+To override the model path:
 ```bash
-ADDRESS_MODEL_DIR=/absolute/path/to/model uvicorn service.main:app --port 8001
+ADDRESS_MODEL_DIR=/path/to/model venv/bin/uvicorn service.main:app --port 8001
 ```
 
 ---
 
 ## Regenerating training data
 
-If the parquet needs to be regenerated (e.g. after adding more GNAF addresses):
+If GNAF is updated or you want to expand to more states:
 
 ```bash
-# From data-layer/ with the DB running:
-venv/bin/python training/generate_address_data.py \
-  --output training/data/address_training.parquet \
-  --training --parquet
-
-# Then re-run steps 3 and 4 above.
+bash training/run_docker_training.sh --generate-data --states QLD,NSW
+# Then re-prepare and retrain:
+bash training/run_docker_training.sh --build --prepare --train
 ```
