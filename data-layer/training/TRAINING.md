@@ -6,80 +6,64 @@ Fine-tunes `distilbert-base-uncased` on Australian address examples to produce t
 
 ---
 
-## Prerequisites
+## Overview
 
-- **Docker** with GPU support
-  - Linux: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
-  - Windows: Docker Desktop + WSL2 backend + NVIDIA driver ≥ 527
-- **Python venv** at `data-layer/venv` (only needed for generate step — reads from DB)
-- **PostgreSQL** running with GNAF data loaded (only needed for generate step)
-
-> **WSL2 users:** Run from the native Linux filesystem (`~/`), **not** from `/mnt/e/` or any Windows-mounted drive. Docker I/O through `/mnt/` is 3–5× slower due to the 9P bridge. Copy your working directory if needed:
-> ```bash
-> cp -r /mnt/e/Projects/property2/data-layer ~/property2/data-layer
-> cd ~/property2/data-layer
-> ```
+Training runs on a Windows machine in WSL2 (native Linux filesystem). The generate step runs on Mac (needs DB access), then the parquet is copied to WSL for prepare + train.
 
 ---
 
-## The Pipeline
+## Step 1 — Generate training data (Mac)
 
-All steps are driven by a single script. Run from `data-layer/`:
-
-```
-bash training/run_docker_training.sh [STEPS] [OPTIONS]
-```
-
-| Step flag | What it does | Needs |
-|---|---|---|
-| `--generate-data` | Query GNAF → `address_training.parquet` | DB + venv |
-| `--build` | Build Docker image `address-parser-training` | Docker |
-| `--prepare` | Tokenise + IOB2-label parquet → `iob_dataset/` | Docker + parquet |
-| `--train` | Fine-tune DistilBERT → `training/model/` | Docker GPU + iob_dataset |
-
-Options:
-
-| Option | Default | Description |
-|---|---|---|
-| `--states S` | `QLD` | Comma-separated states, e.g. `QLD,NSW` |
-| `--limit N` | all | Max GNAF addresses to process |
-| `--sample N` | all | Prepare IOB on N rows — fast smoke-test |
-
----
-
-## Step 1 — Generate training data
-
-Queries GNAF from PostgreSQL and writes permuted address examples to a parquet file. Requires the DB to be running and the venv to have `psycopg2` installed.
+Queries GNAF from PostgreSQL and writes permuted address examples to a parquet file. Run from `data-layer/`:
 
 ```bash
-bash training/run_docker_training.sh --generate-data
+venv/bin/python training/generate_address_data.py \
+  --output training/data/address_training.parquet \
+  --states QLD
 ```
 
 Output: `training/data/address_training.parquet` (~12M rows for QLD, ~2 GB)
 
 To limit scope during development:
 ```bash
-bash training/run_docker_training.sh --generate-data --limit 500000
+venv/bin/python training/generate_address_data.py \
+  --output training/data/address_training.parquet \
+  --states QLD \
+  --limit 500000
 ```
 
 ---
 
-## Step 2 — Build the Docker image
+## Step 2 — Copy to WSL
 
-Only needed once, or after changes to `Dockerfile.training` or `requirements-training.txt`.
+Copy the parquet and training scripts to the WSL machine's native filesystem. Using `/mnt/` is significantly slower — use the native Linux filesystem (`~/`):
 
 ```bash
-bash training/run_docker_training.sh --build
+# Example — adjust paths to match your setup
+scp data-layer/training/data/address_training.parquet wsl-machine:~/property2/training/data/
+```
+
+Or copy the entire `data-layer/training/` directory if setting up from scratch.
+
+---
+
+## Step 3 — Set up Python environment (WSL)
+
+Run from the `data-layer/` directory on the WSL machine:
+
+```bash
+python3 -m venv venv
+venv/bin/pip install -r training/requirements-training.txt
 ```
 
 ---
 
-## Step 3 — Prepare IOB dataset
+## Step 4 — Prepare IOB dataset (WSL)
 
-Tokenises the parquet with the DistilBERT tokeniser and assigns IOB2 labels. Runs in Docker (CPU). Writes intermediate parquet shards to avoid OOM, then saves a HuggingFace DatasetDict.
+Tokenises the parquet with the DistilBERT tokeniser and assigns IOB2 labels. Writes intermediate parquet shards to avoid OOM, then saves a HuggingFace DatasetDict. Run from `data-layer/`:
 
 ```bash
-bash training/run_docker_training.sh --prepare
+venv/bin/python -m training.prepare_iob
 ```
 
 Output: `training/data/iob_dataset/` (~9.3M examples, 3 train shards + 1 validation shard)
@@ -91,46 +75,34 @@ Prepared 9,320,386 examples (7.0% rows skipped due to alignment failures)
   validation:   466,020 examples
 ```
 
-Smoke-test first on 50k rows (~2 min):
+Smoke-test on 50k rows (~2 min):
 ```bash
-bash training/run_docker_training.sh --prepare --sample 50000
+venv/bin/python -m training.prepare_iob --sample 50000
 ```
 
 ---
 
-## Step 4 — Train
+## Step 5 — Train (WSL, GPU)
 
-Fine-tunes DistilBERT on the IOB dataset. Requires a CUDA-capable GPU.
+Fine-tunes DistilBERT on the IOB dataset. Requires a CUDA-capable GPU. Run from `data-layer/`:
 
 ```bash
-bash training/run_docker_training.sh --train
+venv/bin/python -m training.train
 ```
 
 Output: `training/model/` (~260 MB)
 
-Training saves checkpoints every 2,000 steps. If interrupted, re-running `--train` resumes from the last checkpoint automatically.
+Training saves checkpoints every 2,000 steps. If interrupted, re-running resumes from the last checkpoint automatically.
 
 **Expected validation F1 after 3 epochs: > 0.97**
 
 ---
 
-## Common combinations
+## Step 6 — Copy model back to Mac
 
 ```bash
-# Everything from scratch:
-bash training/run_docker_training.sh --generate-data --build --prepare --train
-
-# Parquet already exists — build + prepare + train:
-bash training/run_docker_training.sh --build --prepare --train
-
-# Image already built, iob_dataset ready — just train:
-bash training/run_docker_training.sh --train
-
-# Rebuild image and retrain (iob_dataset unchanged):
-bash training/run_docker_training.sh --build --train
-
-# Smoke-test the full pipeline on 50k rows:
-bash training/run_docker_training.sh --build --prepare --train --sample 50000
+# Example — adjust paths to match your setup
+scp -r wsl-machine:~/property2/training/model/ data-layer/training/model/
 ```
 
 ---
@@ -149,7 +121,7 @@ training/model/
 └── label_config.json
 ```
 
-Start the service:
+Start the service (Mac):
 
 ```bash
 cd data-layer
@@ -187,10 +159,15 @@ ADDRESS_MODEL_DIR=/path/to/model venv/bin/uvicorn service.main:app --port 8001
 
 ## Regenerating training data
 
-If GNAF is updated or you want to expand to more states:
+If GNAF is updated or you want to expand to more states, repeat Steps 1–6:
 
 ```bash
-bash training/run_docker_training.sh --generate-data --states QLD,NSW
-# Then re-prepare and retrain:
-bash training/run_docker_training.sh --build --prepare --train
+# Mac — regenerate
+venv/bin/python training/generate_address_data.py \
+  --output training/data/address_training.parquet \
+  --states QLD,NSW
+
+# Copy to WSL, then in WSL:
+venv/bin/python -m training.prepare_iob
+venv/bin/python -m training.train
 ```
