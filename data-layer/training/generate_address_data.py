@@ -18,6 +18,7 @@ Run from data-layer/ directory.
 
 import argparse
 import csv
+import json
 import logging
 import os
 import random
@@ -64,6 +65,7 @@ OUTPUT_COLUMNS = [
     "building_name",
     "source",
     "permutation_type",
+    "field_values_json",
 ]
 
 
@@ -567,7 +569,7 @@ def stream_gnaf_training(
 # Output writers
 # ---------------------------------------------------------------------------
 
-def _row_to_output(rec: AddressRecord, formatted: str, ptype: str) -> list:
+def _row_to_output(rec: AddressRecord, formatted: str, ptype: str, field_values: dict[str, str]) -> list:
     return [
         formatted,
         rec.get("flat_type") or "",
@@ -586,6 +588,7 @@ def _row_to_output(rec: AddressRecord, formatted: str, ptype: str) -> list:
         rec.get("building_name") or "",
         rec["source"],
         ptype,
+        json.dumps(field_values, separators=(",", ":")),
     ]
 
 
@@ -728,8 +731,8 @@ def main() -> None:
                 rng=rng,
             )
             rows = [
-                _row_to_output(rec, fmt, ptype)
-                for fmt, ptype in perms
+                _row_to_output(rec, fmt, ptype, fvals)
+                for fmt, ptype, fvals in perms
                 if fmt not in seen_formatted
             ]
             seen_formatted.update(r[0] for r in rows)

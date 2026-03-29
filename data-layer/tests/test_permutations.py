@@ -195,18 +195,18 @@ def _complex_rec(**overrides) -> AddressRecord:
 def test_canonical_simple(lookups):
     results = perm_canonical(_simple_rec(), lookups)
     assert len(results) == 1
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "canonical"
     assert addr == "16 Banjo Street, Old Adaminaby NSW 2629"
 
 
 def test_canonical_unit(lookups):
-    addr, _ = perm_canonical(_unit_rec(), lookups)[0]
+    addr, _, _ = perm_canonical(_unit_rec(), lookups)[0]
     assert addr == "Flat 9, 8 Trenerry Crescent, Abbotsford VIC 3067"
 
 
 def test_canonical_complex(lookups):
-    addr, _ = perm_canonical(_complex_rec(), lookups)[0]
+    addr, _, _ = perm_canonical(_complex_rec(), lookups)[0]
     assert "Unit 4" in addr
     assert "Level 2" in addr
     assert "Harbour Tower" in addr
@@ -216,7 +216,7 @@ def test_canonical_complex(lookups):
 
 def test_canonical_all_outputs_title_case(lookups):
     for rec in [_simple_rec(), _unit_rec(), _complex_rec()]:
-        addr, _ = perm_canonical(rec, lookups)[0]
+        addr, _, _ = perm_canonical(rec, lookups)[0]
         # No fully-uppercase words except postcode digits
         for word in addr.split():
             if word.isdigit():
@@ -236,7 +236,7 @@ def test_canonical_all_outputs_title_case(lookups):
 def test_street_abbrev_gnaf_produces_st(lookups):
     results = perm_street_abbrev_gnaf(_simple_rec(), lookups)
     assert len(results) == 1
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "street_abbrev_gnaf"
     assert "St" in addr
     assert "Street" not in addr
@@ -255,7 +255,7 @@ def test_street_abbrev_gnaf_skips_when_same(lookups):
 
 def test_street_abbrev_gnaf_crescent_gives_cr(lookups):
     results = perm_street_abbrev_gnaf(_unit_rec(), lookups)
-    addr, _ = results[0]
+    addr, _, _ = results[0]
     assert "Cr" in addr
     assert "Crescent" not in addr
 
@@ -267,7 +267,7 @@ def test_street_abbrev_gnaf_crescent_gives_cr(lookups):
 def test_slash_notation_basic(lookups):
     results = perm_slash_notation(_unit_rec(), lookups)
     assert len(results) == 1
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "slash_notation"
     # Should be "9/8 Trenerry ..." — no unit type
     assert addr.startswith("9/8 ")
@@ -286,7 +286,7 @@ def test_slash_notation_returns_empty_when_level_present(lookups):
 def test_slash_notation_range(lookups):
     rec = _unit_rec(street_number="12", street_number_last="14", flat_number="4")
     results = perm_slash_notation(rec, lookups)
-    addr, _ = results[0]
+    addr, _, _ = results[0]
     assert addr.startswith("4/12-14 ")
 
 
@@ -296,7 +296,7 @@ def test_slash_notation_range(lookups):
 
 def test_slash_unit_level_street_produces_triple_slash(lookups):
     results = perm_slash_unit_level_street(_complex_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "slash_unit_level_street"
     assert addr.startswith("4/2/12")
 
@@ -315,7 +315,7 @@ def test_slash_unit_level_street_returns_empty_when_no_unit(lookups):
 
 def test_slash_with_type_includes_unit_type(lookups):
     results = perm_slash_with_type(_unit_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "slash_with_type"
     assert "Flat 9/8 " in addr
 
@@ -343,7 +343,7 @@ def test_flat_abbrev_gnaf_produces_apt_for_apartment(lookups):
     rec = _unit_rec(flat_type="Apartment", flat_type_code="APT", flat_type_gnaf_abbrev="APT")
     results = perm_flat_abbrev_gnaf(rec, lookups)
     assert len(results) == 1
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "flat_abbrev_gnaf"
     assert "Apt 9" in addr
 
@@ -359,14 +359,14 @@ def test_flat_abbrev_gnaf_no_unit_returns_empty(lookups):
 def test_flat_abbrev_informal_unit_gives_u_and_ut(lookups):
     rec = _unit_rec(flat_type="Unit", flat_type_code="UNIT", flat_type_gnaf_abbrev="UNIT")
     results = perm_flat_abbrev_informal(rec, lookups)
-    types = [addr for addr, _ in results]
+    types = [addr for addr, _, _ in results]
     assert any("U 9" in a for a in types)
     assert any("Ut 9" in a for a in types)
 
 
 def test_flat_abbrev_informal_flat_gives_f_and_flt(lookups):
     results = perm_flat_abbrev_informal(_unit_rec(), lookups)
-    types = [addr for addr, _ in results]
+    types = [addr for addr, _, _ in results]
     assert any("F 9" in a for a in types)
     assert any("Flt 9" in a for a in types)
 
@@ -382,7 +382,7 @@ def test_flat_abbrev_informal_no_unit_returns_empty(lookups):
 def test_flat_no_space_unit(lookups):
     rec = _unit_rec(flat_type="Unit", flat_type_code="UNIT", flat_type_gnaf_abbrev="UNIT")
     results = perm_flat_no_space(rec, lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "flat_no_space"
     assert "U9" in addr
     assert "U 9" not in addr
@@ -394,7 +394,7 @@ def test_flat_no_space_returns_empty_when_no_informal_variants(lookups):
     # SUITE → ["Ste"] in abbreviations.py, so it should produce a result
     results = perm_flat_no_space(rec, lookups)
     if results:
-        addr, _ = results[0]
+        addr, _, _ = results[0]
         assert " " not in addr.split(",")[0].split("/")[0].split()[0]
 
 
@@ -404,7 +404,7 @@ def test_flat_no_space_returns_empty_when_no_informal_variants(lookups):
 
 def test_level_abbrev_produces_lvl_and_l2(lookups):
     results = perm_level_abbrev(_complex_rec(), lookups)
-    addrs = [addr for addr, _ in results]
+    addrs = [addr for addr, _, _ in results]
     # Should have "Lvl 2" or "Lv 2" and "L2"
     assert any("Lvl 2" in a or "Lv 2" in a for a in addrs)
     assert any("L2" in a for a in addrs)
@@ -420,7 +420,7 @@ def test_level_abbrev_returns_empty_when_no_level(lookups):
 
 def test_suffix_abbrev_produces_n_and_nth(lookups):
     results = perm_suffix_abbrev(_complex_rec(), lookups)
-    addrs = [addr for addr, _ in results]
+    addrs = [addr for addr, _, _ in results]
     # Should have "N" (GNAF code) and "Nth" (informal)
     assert any("Smith Street N" in a or "Smith St N" in a for a in addrs)
     assert any("Nth" in a for a in addrs)
@@ -436,7 +436,7 @@ def test_suffix_abbrev_returns_empty_when_no_suffix(lookups):
 
 def test_no_postcode(lookups):
     results = perm_no_postcode(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "no_postcode"
     assert "2629" not in addr
     assert "NSW" in addr
@@ -449,7 +449,7 @@ def test_no_postcode_returns_empty_when_no_postcode(lookups):
 
 def test_no_state_postcode(lookups):
     results = perm_no_state_postcode(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "no_state_postcode"
     assert "NSW" not in addr
     assert "2629" not in addr
@@ -458,7 +458,7 @@ def test_no_state_postcode(lookups):
 
 def test_minimal(lookups):
     results = perm_minimal(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "minimal"
     assert "Old Adaminaby" not in addr
     assert "Banjo" in addr
@@ -478,14 +478,14 @@ def test_minimal_returns_empty_when_level_present(lookups):
 
 def test_no_commas(lookups):
     results = perm_no_commas(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "no_commas"
     assert "," not in addr
 
 
 def test_extra_commas(lookups):
     results = perm_extra_commas(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "extra_commas"
     assert "NSW, 2629" in addr
 
@@ -497,7 +497,7 @@ def test_extra_commas_returns_empty_when_no_postcode(lookups):
 
 def test_state_postcode_joined(lookups):
     results = perm_state_postcode_joined(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "state_postcode_joined"
     assert "NSW2629" in addr
 
@@ -513,14 +513,14 @@ def test_state_postcode_joined_returns_empty_when_no_postcode(lookups):
 
 def test_building_first(lookups):
     results = perm_building_first(_complex_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "building_first"
     assert addr.startswith("Harbour Tower,")
 
 
 def test_building_after_unit(lookups):
     results = perm_building_after_unit(_complex_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "building_after_unit"
     assert addr.startswith("Unit 4, Harbour Tower")
 
@@ -528,11 +528,11 @@ def test_building_after_unit(lookups):
 def test_building_omitted(lookups):
     results = perm_building_omitted(_complex_rec(), lookups)
     assert len(results) > 1
-    ptypes = [p for _, p in results]
+    ptypes = [p for _, p, _ in results]
     assert "building_omitted" in ptypes
     assert "building_omitted_street_abbrev" in ptypes
     assert "building_omitted_triple_slash" in ptypes
-    for addr, _ in results:
+    for addr, _, _ in results:
         assert "Harbour Tower" not in addr
 
 
@@ -554,7 +554,7 @@ def test_building_first_requires_unit(lookups):
 
 def test_number_range_spaced(lookups):
     results = perm_number_range_spaced(_complex_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "number_range_spaced"
     assert "12 - 14" in addr
 
@@ -570,7 +570,7 @@ def test_number_range_returns_empty_when_no_last(lookups):
 def test_lot_with_street(lookups):
     rec = _simple_rec(lot_number="2556")
     results = perm_lot_with_street(rec, lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "lot_with_street"
     assert "Lot 2556" in addr
     assert "16 Banjo Street" in addr
@@ -594,7 +594,7 @@ def test_lot_returns_empty_when_no_lot(lookups):
 def test_suburb_expand_mt_to_mount(lookups):
     rec = _simple_rec(suburb="Mt Gravatt East")
     results = perm_suburb_expand(rec, lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "suburb_expand"
     assert "Mount Gravatt East" in addr
 
@@ -602,7 +602,7 @@ def test_suburb_expand_mt_to_mount(lookups):
 def test_suburb_abbrev_mount_to_mt(lookups):
     rec = _simple_rec(suburb="Mount Gravatt East")
     results = perm_suburb_abbrev(rec, lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "suburb_abbrev"
     assert "Mt Gravatt East" in addr
 
@@ -621,7 +621,7 @@ def test_suburb_abbrev_returns_empty_when_no_known_prefix(lookups):
 
 def test_reversed(lookups):
     results = perm_reversed(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "reversed"
     # Suburb appears before the street number
     suburb_pos = addr.index("Old Adaminaby")
@@ -631,7 +631,7 @@ def test_reversed(lookups):
 
 def test_postcode_before_suburb(lookups):
     results = perm_postcode_before_suburb(_simple_rec(), lookups)
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "postcode_before_suburb"
     assert "2629 Old Adaminaby NSW" in addr
 
@@ -648,12 +648,12 @@ def test_postcode_before_suburb_returns_empty_when_no_postcode(lookups):
 def test_with_country(lookups):
     results = perm_with_country(_simple_rec(), lookups)
     assert len(results) == 2
-    ptypes = {p for _, p in results}
+    ptypes = {p for _, p, _ in results}
     assert "with_country_full" in ptypes
     assert "with_country_abbrev" in ptypes
-    full_addr = next(a for a, p in results if p == "with_country_full")
+    full_addr = next(a for a, p, _ in results if p == "with_country_full")
     assert full_addr.endswith(", Australia")
-    abbrev_addr = next(a for a, p in results if p == "with_country_abbrev")
+    abbrev_addr = next(a for a, p, _ in results if p == "with_country_abbrev")
     assert abbrev_addr.endswith(", Au")
 
 
@@ -664,7 +664,7 @@ def test_with_country(lookups):
 def test_number_prefix(lookups):
     results = perm_number_prefix(_simple_rec(), lookups)
     assert len(results) == 2
-    addrs = [a for a, _ in results]
+    addrs = [a for a, _, _ in results]
     assert any("No. 16" in a for a in addrs)
     assert any(a for a in addrs if "No 16" in a and "No. 16" not in a)
 
@@ -683,7 +683,7 @@ def test_noisy_produces_mutation(lookups):
     rng = _random.Random(0)
     results = perm_noisy(_simple_rec(), lookups, rng=rng)
     assert len(results) == 1
-    addr, ptype = results[0]
+    addr, ptype, _ = results[0]
     assert ptype == "noisy"
     # The noisy address should differ from canonical
     canonical = perm_canonical(_simple_rec(), lookups)[0][0]
@@ -697,7 +697,7 @@ def test_noisy_produces_mutation(lookups):
 def test_generate_permutations_deduplicates(lookups):
     rec = _simple_rec()
     perms = generate_permutations(rec, lookups, max_perms=20)
-    addrs = [a for a, _ in perms]
+    addrs = [a for a, _, _ in perms]
     assert len(addrs) == len(set(addrs)), "Duplicate formatted addresses found"
 
 
@@ -706,7 +706,7 @@ def test_generate_permutations_canonical_labels_identical(lookups):
     rec = _unit_rec()
     perms = generate_permutations(rec, lookups, max_perms=10)
     # The label is always the record's canonical fields — verify all share same street_number
-    for addr, _ in perms:
+    for addr, _, _ in perms:
         assert addr.strip()
 
 
@@ -719,7 +719,7 @@ def test_generate_permutations_respects_max_perms(lookups):
 def test_generate_permutations_no_empty_addresses(lookups):
     for rec in [_simple_rec(), _unit_rec(), _complex_rec()]:
         perms = generate_permutations(rec, lookups, max_perms=15, include_noisy=True)
-        for addr, _ in perms:
+        for addr, _, _ in perms:
             assert addr.strip(), f"Empty address in permutations for {rec}"
 
 
@@ -727,7 +727,7 @@ def test_generate_permutations_missing_postcode(lookups):
     rec = _simple_rec(postcode=None)
     perms = generate_permutations(rec, lookups, max_perms=10)
     assert len(perms) > 0
-    for addr, _ in perms:
+    for addr, _, _ in perms:
         assert addr.strip()
 
 
@@ -768,7 +768,7 @@ def test_generate_permutations_no_postcode_no_abbrev(lookups):
     )
     perms = generate_permutations(rec, lookups, max_perms=8)
     assert len(perms) > 0
-    for addr, _ in perms:
+    for addr, _, _ in perms:
         assert addr.strip()
 
 # ---------------------------------------------------------------------------
@@ -788,7 +788,7 @@ def test_corner_no_numbers(lookups):
         cross_street_type_abbrev="St",
     )
     results = perm_corner(rec, lookups)
-    addrs = [a for a, _ in results]
+    addrs = [a for a, _, _ in results]
     assert any("Cnr Banjo St & Hutchins St" in a for a in addrs)
     assert any("Corner Banjo Street And Hutchins Street" in a for a in addrs)
     assert any("Cnr Banjo St/Hutchins St" in a for a in addrs)
@@ -813,8 +813,8 @@ def test_corner_both_numbers(lookups):
         cross_street_type_abbrev="St",
     )
     results = perm_corner(rec, lookups)
-    addrs = [a for a, _ in results]
-    ptypes = [p for _, p in results]
+    addrs = [a for a, _, _ in results]
+    ptypes = [p for _, p, _ in results]
     assert any("14 Hooker St & 43 Hutchins St" in a for a in addrs)
     assert any("14 Hooker St / 43 Hutchins St" in a for a in addrs)
     assert any("Cnr 14 Hooker St & 43 Hutchins St" in a for a in addrs)
@@ -830,7 +830,7 @@ def test_corner_locality_included(lookups):
         cross_street_type="Street",
         cross_street_type_abbrev="St",
     )
-    for addr, _ in perm_corner(rec, lookups):
+    for addr, _, _ in perm_corner(rec, lookups):
         assert "Old Adaminaby" in addr
 
 

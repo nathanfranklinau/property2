@@ -5,6 +5,11 @@ For each row, aligns each field value to its character span in the formatted_add
 tokenizes with the DistilBERT tokenizer, and assigns token-level IOB2 labels.
 Continuation subwords get label -100 (ignored during training loss computation).
 
+Alignment uses the field_values_json column (written by generate_address_data.py) which
+stores the token strings as they actually appear in the formatted address for each field,
+rather than the canonical parquet columns. This allows abbreviated and fused formats to
+align correctly.
+
 Output: HuggingFace DatasetDict saved to training/data/iob_dataset/
   - train split: 95%
   - validation split: 5%
@@ -58,24 +63,6 @@ LABEL_NAMES = (
     + [f"I-{f.upper()}" for f in FIELD_ORDER]
 )
 LABEL_TO_ID: dict[str, int] = {name: i for i, name in enumerate(LABEL_NAMES)}
-
-# ── Excluded permutation types ────────────────────────────────────────────────
-# These replace full field values with abbreviations, making direct substring
-# matching against the parquet field value unreliable.
-
-EXCLUDED_PERMUTATIONS: set[str] = {
-    "street_abbrev_gnaf",
-    "street_abbrev_informal",
-    "flat_abbrev_informal",
-    "flat_abbrev_gnaf",
-    "level_abbrev_informal",
-    "level_code_joined",
-    "slash_notation",
-    "state_postcode_joined",
-    "number_prefix_no",
-    "number_prefix_no_dot",
-    "state_full_name",
-}
 
 TOKENIZER_NAME = "distilbert-base-uncased"
 MAX_LENGTH = 128
@@ -229,7 +216,15 @@ def _process_batch(batch: pd.DataFrame, tokenizer) -> list[dict]:
     results: list[dict] = []
     for _, row in batch.iterrows():
         address: str = row["formatted_address"]
-        fields = {f: str(row[f]) for f in FIELD_ORDER if row.get(f)}
+        # Use field_values_json — the token strings as they actually appear in
+        # the formatted address for this specific permutation. Falls back to the
+        # canonical columns for parquets generated before this field was added.
+        raw_fvals = row.get("field_values_json")
+        if raw_fvals:
+            fvals: dict = json.loads(raw_fvals) if isinstance(raw_fvals, str) else raw_fvals
+            fields = {f: str(fvals[f]) for f in FIELD_ORDER if fvals.get(f)}
+        else:
+            fields = {f: str(row[f]) for f in FIELD_ORDER if row.get(f)}
 
         spans = _find_field_spans(address, fields)
         if spans is None:
@@ -311,13 +306,6 @@ def main() -> None:
     log.info(f"Loading parquet: {args.input}")
     df = pd.read_parquet(args.input)
     log.info(f"Total rows: {len(df):,}")
-
-    before = len(df)
-    df = df[~df["permutation_type"].isin(EXCLUDED_PERMUTATIONS)]
-    log.info(
-        f"After permutation filter: {len(df):,} rows "
-        f"(excluded {before - len(df):,} abbreviated-format rows)"
-    )
 
     if args.sample:
         df = df.sample(n=min(args.sample, len(df)), random_state=42)

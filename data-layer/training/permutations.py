@@ -1,10 +1,15 @@
-"""Permutation engine: AddressRecord → list of (formatted_address, permutation_type).
+"""Permutation engine: AddressRecord → list of (formatted_address, permutation_type, field_values).
 
 All output strings are title-cased. Case is not a training concern — the model's
 preprocessing handles normalisation.
 
 Each permutation function takes (record, lookups) and returns a list of
-(formatted_address, permutation_type) tuples. Returns [] when not applicable.
+(formatted_address, permutation_type, field_values) triples. Returns [] when not applicable.
+
+field_values maps each FIELD_ORDER key to the token string that actually appears in
+formatted_address for that field. Empty string means the field is absent from the string.
+The prepare_iob alignment code uses these values — not the canonical parquet columns —
+so abbreviated and fused formats align correctly.
 """
 
 import random
@@ -206,6 +211,30 @@ def _assemble(parts: list[str], separator: str = ", ") -> str:
     return separator.join(p for p in parts if p)
 
 
+def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
+    """Return field values as they appear in the canonical formatted address.
+
+    Keys match FIELD_ORDER in prepare_iob.py. Empty string means the field
+    is absent from this record (alignment code skips empty values).
+    """
+    return {
+        "building_name": _tc(rec.get("building_name")) or "",
+        "unit_type":     _tc(rec.get("flat_type")) or "",
+        "unit_number":   rec.get("flat_number") or "",
+        "level_type":    _tc(rec.get("level_type")) or "",
+        "level_number":  rec.get("level_number") or "",
+        "lot_number":    rec.get("lot_number") or "",
+        "street_number": rec["street_number"],
+        "street_number_last": rec.get("street_number_last") or "",
+        "street_name":   _tc(rec["street_name"]),
+        "street_type":   _tc(rec.get("street_type")) or "",
+        "street_suffix": _tc(rec.get("street_suffix")) or "",
+        "suburb":        _tc(rec["suburb"]),
+        "state":         rec["state"].upper(),
+        "postcode":      rec.get("postcode") or "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Core canonical assembler
 # ---------------------------------------------------------------------------
@@ -238,14 +267,14 @@ def _canonical(
 # Each returns list[tuple[str, str]]: [(formatted_address, permutation_type), ...]
 # ---------------------------------------------------------------------------
 
-def perm_canonical(rec: AddressRecord, lookups: AbbrevLookups) -> list[tuple[str, str]]:
+def perm_canonical(rec: AddressRecord, lookups: AbbrevLookups) -> list[tuple[str, str, dict[str, str]]]:
     """Full formal address — all present components."""
-    return [(_canonical(rec), "canonical")]
+    return [(_canonical(rec), "canonical", _canonical_fields(rec))]
 
 
 def perm_street_abbrev_gnaf(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """GNAF official street type abbreviation (ST, RD, AV…)."""
     abbrev = rec.get("street_type_abbrev")
     if not abbrev or not rec.get("street_type"):
@@ -262,12 +291,12 @@ def perm_street_abbrev_gnaf(
         street,
         _locality_block(rec),
     ])
-    return [(addr, "street_abbrev_gnaf")]
+    return [(addr, "street_abbrev_gnaf", {**_canonical_fields(rec), "street_type": abbrev_title})]
 
 
 def perm_street_abbrev_informal(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Informal street type abbreviation variants (Ave, Cres, Blvd…)."""
     code = rec.get("street_type_code")
     if not code:
@@ -283,13 +312,13 @@ def perm_street_abbrev_informal(
             street,
             _locality_block(rec),
         ])
-        results.append((addr, "street_abbrev_informal"))
+        results.append((addr, "street_abbrev_informal", {**_canonical_fields(rec), "street_type": variant}))
     return results
 
 
 def perm_slash_notation(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Slash notation for unit addresses: '4/12 Smith St, Brisbane Qld 4000'.
 
     Skipped when a level number is present — '9/40 Smith St' with Suite 9, Level 11
@@ -321,12 +350,14 @@ def perm_slash_notation(
         street_parts.append(_tc(rec["street_suffix"]))
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    return [(full, "slash_notation")]
+    # unit_type is absent (slash replaces it); street_type may be abbreviated
+    fvals = {**_canonical_fields(rec), "unit_type": "", "street_type": st or ""}
+    return [(full, "slash_notation", fvals)]
 
 
 def perm_slash_unit_level_street(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Unit/level/street slash: '9/11/40 Marcus Clarke St, City Act 2601'.
 
     Only applicable when both flat_number and level_number are present.
@@ -347,12 +378,14 @@ def perm_slash_unit_level_street(
         street_parts.append(_tc(rec["street_suffix"]))
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    return [(full, "slash_unit_level_street")]
+    # unit_type and level_type absent; street_type may be abbreviated
+    fvals = {**_canonical_fields(rec), "unit_type": "", "level_type": "", "street_type": st or ""}
+    return [(full, "slash_unit_level_street", fvals)]
 
 
 def perm_slash_with_type(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Hybrid slash: 'Unit 4/12 Smith Street North, Brisbane Qld 4000'.
 
     Skipped when a level number is present — 'Suite 9/40 Smith St' would silently
@@ -376,12 +409,12 @@ def perm_slash_with_type(
         street_parts.append(sfx)
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    return [(full, "slash_with_type")]
+    return [(full, "slash_with_type", _canonical_fields(rec))]
 
 
 def perm_flat_abbrev_gnaf(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """GNAF flat type abbreviation (U, F, Offc…) where it differs from full name."""
     if not rec.get("flat_number") or not rec.get("flat_type"):
         return []
@@ -395,12 +428,12 @@ def perm_flat_abbrev_gnaf(
     abbrev_title = gnaf_code.title()
     unit = f"{abbrev_title} {rec['flat_number']}"
     addr = _canonical(rec, unit_str=unit)
-    return [(addr, "flat_abbrev_gnaf")]
+    return [(addr, "flat_abbrev_gnaf", {**_canonical_fields(rec), "unit_type": abbrev_title})]
 
 
 def perm_flat_abbrev_informal(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Informal flat type abbreviations (Ut, Flt, Apt…)."""
     if not rec.get("flat_number") or not rec.get("flat_type"):
         return []
@@ -410,13 +443,13 @@ def perm_flat_abbrev_informal(
     for variant in extras:
         unit = f"{variant} {rec['flat_number']}"
         addr = _canonical(rec, unit_str=unit)
-        results.append((addr, "flat_abbrev_informal"))
+        results.append((addr, "flat_abbrev_informal", {**_canonical_fields(rec), "unit_type": variant}))
     return results
 
 
 def perm_flat_no_space(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """No-space unit notation: 'U4', 'F9'."""
     if not rec.get("flat_number") or not rec.get("flat_type"):
         return []
@@ -426,14 +459,17 @@ def perm_flat_no_space(
         return []
     # Use first (shortest) variant — typically single letter
     short = extras[0]
-    unit = f"{short}{rec['flat_number']}"  # no space
-    addr = _canonical(rec, unit_str=unit)
-    return [(addr, "flat_no_space")]
+    fused = f"{short}{rec['flat_number']}"  # no space — e.g. "U4"
+    addr = _canonical(rec, unit_str=fused)
+    # The fused token "U4" can't be split by the aligner; treat the whole thing
+    # as unit_number so the model learns to label "U4" as B-UNIT_NUMBER.
+    fvals = {**_canonical_fields(rec), "unit_type": "", "unit_number": fused}
+    return [(addr, "flat_no_space", fvals)]
 
 
 def perm_level_abbrev(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Level abbreviations: 'Lvl 2', 'Fl 2', 'L2' (code+number joined)."""
     if not rec.get("level_number") or not rec.get("level_type"):
         return []
@@ -441,22 +477,24 @@ def perm_level_abbrev(
     code = rec.get("level_type_code")
     extras = EXTRA_LEVEL_TYPE_VARIANTS.get(full_upper, [])
     results = []
-    # Informal variants with space
+    # Informal variants with space: "Lvl 2" — level_type token changes
     for variant in extras:
         level = f"{variant} {rec['level_number']}"
         addr = _canonical(rec, level_str=level)
-        results.append((addr, "level_abbrev"))
+        results.append((addr, "level_abbrev", {**_canonical_fields(rec), "level_type": variant}))
     # Code+number joined (e.g. L2, FL3) — only if code is short (≤2 chars)
+    # The fused token can't be split; label the whole thing as level_number.
     if code and len(code) <= 2 and code.upper() != full_upper:
-        level = f"{code.title()}{rec['level_number']}"
-        addr = _canonical(rec, level_str=level)
-        results.append((addr, "level_code_joined"))
+        fused = f"{code.title()}{rec['level_number']}"
+        addr = _canonical(rec, level_str=fused)
+        fvals = {**_canonical_fields(rec), "level_type": "", "level_number": fused}
+        results.append((addr, "level_code_joined", fvals))
     return results
 
 
 def perm_suffix_abbrev(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Street suffix abbreviations: 'Nth', 'Sth', 'N', 'S'."""
     if not rec.get("street_suffix"):
         return []
@@ -466,7 +504,8 @@ def perm_suffix_abbrev(
     results = []
     # GNAF code (single/double letter abbreviation)
     if code and code.upper() != full_upper:
-        street = _street_block(rec, suffix_override=code.title())
+        code_title = code.title()
+        street = _street_block(rec, suffix_override=code_title)
         addr = _assemble([
             _unit_prefix(rec) if rec.get("flat_number") else "",
             _level_prefix(rec) if rec.get("level_number") else "",
@@ -474,7 +513,7 @@ def perm_suffix_abbrev(
             street,
             _locality_block(rec),
         ])
-        results.append((addr, "suffix_abbrev_gnaf"))
+        results.append((addr, "suffix_abbrev_gnaf", {**_canonical_fields(rec), "street_suffix": code_title}))
     # Informal variants (Nth, Sth…)
     for variant in extras:
         street = _street_block(rec, suffix_override=variant)
@@ -485,33 +524,33 @@ def perm_suffix_abbrev(
             street,
             _locality_block(rec),
         ])
-        results.append((addr, "suffix_abbrev_informal"))
+        results.append((addr, "suffix_abbrev_informal", {**_canonical_fields(rec), "street_suffix": variant}))
     return results
 
 
 def perm_no_postcode(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Omit postcode: '12 Smith Street, Brisbane Qld'."""
     if not rec.get("postcode"):
         return []
     locality = _locality_block(rec, omit_postcode=True)
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "no_postcode")]
+    return [(addr, "no_postcode", {**_canonical_fields(rec), "postcode": ""})]
 
 
 def perm_no_state_postcode(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Omit state and postcode: '12 Smith Street, Brisbane'."""
     locality = _tc(rec["suburb"])
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "no_state_postcode")]
+    return [(addr, "no_state_postcode", {**_canonical_fields(rec), "state": "", "postcode": ""})]
 
 
 def perm_minimal(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Minimal: street number + name + type only.
 
     Skipped when unit or level is present — '40 Marcus Clarke St' is the building
@@ -522,32 +561,36 @@ def perm_minimal(
     abbrev = rec.get("street_type_abbrev")
     st = abbrev.title() if abbrev and abbrev.upper() != (rec.get("street_type_code") or "").upper() else _tc(rec.get("street_type"))
     street = _street_block(rec, street_type_override=st, suffix_override="")
-    return [(street, "minimal")]
+    fvals = {**_canonical_fields(rec), "street_type": st or "", "street_suffix": "",
+             "building_name": "", "suburb": "", "state": "", "postcode": ""}
+    return [(street, "minimal", fvals)]
 
 
 def perm_no_commas(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """No commas — all components separated by spaces."""
     addr = _canonical(rec, separator=" ")
-    return [(addr, "no_commas")]
+    return [(addr, "no_commas", _canonical_fields(rec))]
 
 
 def perm_state_postcode_joined(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """State and postcode joined without space: 'Brisbane QLD4000', 'Old Adaminaby NSW2629'."""
     if not rec.get("postcode") or not rec.get("state"):
         return []
     suburb = _tc(rec["suburb"])
-    locality = f"{suburb} {rec['state'].upper()}{rec['postcode']}"
+    fused = f"{rec['state'].upper()}{rec['postcode']}"  # e.g. "QLD4000"
+    locality = f"{suburb} {fused}"
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "state_postcode_joined")]
+    # Label the fused "QLD4000" token as B-STATE; postcode is absent as a separate token.
+    return [(addr, "state_postcode_joined", {**_canonical_fields(rec), "state": fused, "postcode": ""})]
 
 
 def perm_extra_commas(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Extra comma between state and postcode."""
     if not rec.get("postcode") or not rec.get("state"):
         return []
@@ -556,12 +599,12 @@ def perm_extra_commas(
     postcode = rec["postcode"]
     locality = f"{suburb}, {state}, {postcode}"
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "extra_commas")]
+    return [(addr, "extra_commas", _canonical_fields(rec))]
 
 
 def perm_building_first(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Building name before unit: 'Harbour Tower, Unit 4, 12 Smith St, Brisbane'."""
     if not rec.get("building_name") or not rec.get("flat_number"):
         return []
@@ -570,12 +613,12 @@ def perm_building_first(
     street = _street_block(rec)
     locality = _locality_block(rec)
     addr = _assemble([building, unit, street, locality])
-    return [(addr, "building_first")]
+    return [(addr, "building_first", _canonical_fields(rec))]
 
 
 def perm_building_after_unit(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Building after unit: 'Unit 4, Harbour Tower, 12 Smith St, Brisbane'."""
     if not rec.get("building_name") or not rec.get("flat_number"):
         return []
@@ -584,12 +627,12 @@ def perm_building_after_unit(
     street = _street_block(rec)
     locality = _locality_block(rec)
     addr = _assemble([unit, building, street, locality])
-    return [(addr, "building_after_unit")]
+    return [(addr, "building_after_unit", _canonical_fields(rec))]
 
 
 def perm_building_omitted(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Building name omitted — several core variants without the building.
 
     A human writing the address without the building name can still use any of
@@ -599,40 +642,46 @@ def perm_building_omitted(
     if not rec.get("building_name"):
         return []
 
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, dict[str, str]]] = []
+    base = {**_canonical_fields(rec), "building_name": ""}
 
     def _no_bldg(locality_str: str | None = None, street_str: str | None = None) -> str:
         return _canonical(rec, building_str="", locality_str=locality_str, street_str=street_str)
 
     # Full address without building
-    results.append((_no_bldg(), "building_omitted"))
+    results.append((_no_bldg(), "building_omitted", base))
 
     # Street type abbreviation without building
     abbrev = rec.get("street_type_abbrev")
     if abbrev and abbrev.upper() != (rec.get("street_type_code") or "").upper():
         st = abbrev.title()
-        results.append((_no_bldg(street_str=_street_block(rec, street_type_override=st)), "building_omitted_street_abbrev"))
+        results.append((_no_bldg(street_str=_street_block(rec, street_type_override=st)),
+                         "building_omitted_street_abbrev", {**base, "street_type": st}))
 
     # No postcode without building
     if rec.get("postcode"):
-        results.append((_no_bldg(locality_str=_locality_block(rec, omit_postcode=True)), "building_omitted_no_postcode"))
+        results.append((_no_bldg(locality_str=_locality_block(rec, omit_postcode=True)),
+                         "building_omitted_no_postcode", {**base, "postcode": ""}))
 
     # No state/postcode without building
-    results.append((_no_bldg(locality_str=_tc(rec["suburb"])), "building_omitted_no_state_postcode"))
+    results.append((_no_bldg(locality_str=_tc(rec["suburb"])),
+                     "building_omitted_no_state_postcode", {**base, "state": "", "postcode": ""}))
 
     # State+postcode joined without building
     if rec.get("postcode"):
-        joined_locality = f"{_tc(rec['suburb'])} {rec['state'].upper()}{rec['postcode']}"
-        results.append((_no_bldg(locality_str=joined_locality), "building_omitted_state_joined"))
+        fused = f"{rec['state'].upper()}{rec['postcode']}"
+        joined_locality = f"{_tc(rec['suburb'])} {fused}"
+        results.append((_no_bldg(locality_str=joined_locality),
+                         "building_omitted_state_joined", {**base, "state": fused, "postcode": ""}))
 
     # No commas without building (space-separated) — full unit type plus each abbreviation
-    results.append((_canonical(rec, building_str="", separator=" "), "building_omitted_no_commas"))
+    results.append((_canonical(rec, building_str="", separator=" "), "building_omitted_no_commas", base))
     if rec.get("flat_number") and rec.get("flat_type"):
         full_upper = (rec["flat_type"] or "").upper()
         for variant in EXTRA_FLAT_TYPE_VARIANTS.get(full_upper, []):
             unit_str = f"{variant} {rec['flat_number']}"
             addr = _canonical(rec, building_str="", unit_str=unit_str, separator=" ")
-            results.append((addr, "building_omitted_no_commas"))
+            results.append((addr, "building_omitted_no_commas", {**base, "unit_type": variant}))
 
     # Slash notation without building (unit, no level)
     if rec.get("flat_number") and not rec.get("level_number"):
@@ -647,7 +696,8 @@ def perm_building_omitted(
         if rec.get("street_suffix"):
             street_parts.append(_tc(rec["street_suffix"]))
         slash_str = " ".join(street_parts)
-        results.append((_assemble([slash_str, _locality_block(rec)]), "building_omitted_slash"))
+        results.append((_assemble([slash_str, _locality_block(rec)]),
+                         "building_omitted_slash", {**base, "unit_type": "", "street_type": st or ""}))
 
     # Triple-slash without building (unit + level)
     if rec.get("flat_number") and rec.get("level_number"):
@@ -663,14 +713,16 @@ def perm_building_omitted(
         if rec.get("street_suffix"):
             street_parts.append(_tc(rec["street_suffix"]))
         triple_str = " ".join(street_parts)
-        results.append((_assemble([triple_str, _locality_block(rec)]), "building_omitted_triple_slash"))
+        results.append((_assemble([triple_str, _locality_block(rec)]),
+                         "building_omitted_triple_slash",
+                         {**base, "unit_type": "", "level_type": "", "street_type": st or ""}))
 
     return results
 
 
 def perm_number_range_spaced(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Spaced range: '12 - 14 Smith Street'."""
     if not rec.get("street_number_last"):
         return []
@@ -682,12 +734,12 @@ def perm_number_range_spaced(
         street,
         _locality_block(rec),
     ])
-    return [(addr, "number_range_spaced")]
+    return [(addr, "number_range_spaced", _canonical_fields(rec))]
 
 
 def perm_lot_with_street(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Lot+street: 'Lot 2556, 12 Daisy Hill Road, Buckajo QLD 2550'.
 
     For lot-only addresses (lot_number == street_number, no separate street number),
@@ -712,19 +764,19 @@ def perm_lot_with_street(
         addr = _assemble([lot, street_str, _locality_block(rec)])
     else:
         addr = _assemble([lot, _street_block(rec), _locality_block(rec)])
-    return [(addr, "lot_with_street")]
+    return [(addr, "lot_with_street", _canonical_fields(rec))]
 
 
 def perm_lot_abbrev(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Removed: 'L' is the GNAF code for Level, not Lot — would produce ambiguous training data."""
     return []
 
 
 def perm_suburb_expand(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Expand suburb prefix abbreviation: 'Mt Gravatt' → 'Mount Gravatt'."""
     suburb = _tc(rec["suburb"])
     words = suburb.split()
@@ -737,12 +789,12 @@ def perm_suburb_expand(
     new_suburb = " ".join([expanded] + words[1:])
     locality = _locality_block(rec).replace(suburb, new_suburb)
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "suburb_expand")]
+    return [(addr, "suburb_expand", {**_canonical_fields(rec), "suburb": new_suburb})]
 
 
 def perm_suburb_abbrev(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Abbreviate suburb prefix: 'Mount Gravatt' → 'Mt Gravatt'."""
     suburb = _tc(rec["suburb"])
     words = suburb.split()
@@ -755,24 +807,24 @@ def perm_suburb_abbrev(
     new_suburb = " ".join([abbrev] + words[1:])
     locality = _locality_block(rec).replace(suburb, new_suburb)
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "suburb_abbrev")]
+    return [(addr, "suburb_abbrev", {**_canonical_fields(rec), "suburb": new_suburb})]
 
 
 def perm_reversed(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Suburb-first: 'Brisbane Qld 4000, 12 Smith Street North'."""
     locality = _locality_block(rec)
     street = _street_block(rec)
     unit = _unit_prefix(rec) if rec.get("flat_number") else ""
     level = _level_prefix(rec) if rec.get("level_number") else ""
     addr = _assemble([locality, unit, level, street])
-    return [(addr, "reversed")]
+    return [(addr, "reversed", _canonical_fields(rec))]
 
 
 def perm_postcode_before_suburb(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Postcode before suburb: '12 Smith St, 4000 Brisbane Qld'."""
     if not rec.get("postcode"):
         return []
@@ -780,24 +832,24 @@ def perm_postcode_before_suburb(
     state = rec["state"].upper()
     locality = f"{rec['postcode']} {suburb} {state}"
     addr = _canonical(rec, locality_str=locality)
-    return [(addr, "postcode_before_suburb")]
+    return [(addr, "postcode_before_suburb", _canonical_fields(rec))]
 
 
 def perm_with_country(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Append country: ', Australia' or ', Au'."""
     base = _canonical(rec)
-    results = [
-        (f"{base}, Australia", "with_country_full"),
-        (f"{base}, Au", "with_country_abbrev"),
+    fvals = _canonical_fields(rec)
+    return [
+        (f"{base}, Australia", "with_country_full", fvals),
+        (f"{base}, Au", "with_country_abbrev", fvals),
     ]
-    return results
 
 
 def perm_number_prefix(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Number prefix: 'No. 12 Smith Street' or 'No 12 Smith Street'."""
     num = rec["street_number"]
     name = _tc(rec["street_name"])
@@ -813,6 +865,7 @@ def perm_number_prefix(
     unit = _unit_prefix(rec) if rec.get("flat_number") else ""
     level = _level_prefix(rec) if rec.get("level_number") else ""
     locality = _locality_block(rec)
+    fvals = _canonical_fields(rec)
     results = []
     for prefix, ptype in [("No. ", "number_prefix_period"), ("No ", "number_prefix_nospace")]:
         street_parts = [f"{prefix}{num}", name]
@@ -822,13 +875,13 @@ def perm_number_prefix(
             street_parts.append(sfx)
         street = " ".join(street_parts)
         addr = _assemble([unit, level, street, locality])
-        results.append((addr, ptype))
+        results.append((addr, ptype, fvals))
     return results
 
 
 def perm_corner(
     rec: AddressRecord, lookups: AbbrevLookups
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Corner address permutations using the CD alias cross-street from GNAF.
 
     Generates multiple formats — with and without street numbers, using &, /, And.
@@ -857,33 +910,37 @@ def perm_corner(
     x_full = " ".join(p for p in [x_name, x_type] if p)
     x_short = " ".join(p for p in [x_name, x_abbrev] if p)
 
-    results: list[tuple[str, str]] = []
+    # Corner formats use the abbreviated street type; principal labels are canonical.
+    fvals = {**_canonical_fields(rec), "street_type": p_abbrev_tc or p_type or ""}
+    results: list[tuple[str, str, dict[str, str]]] = []
 
     # --- No numbers (classic Cnr format) ---
     # "Cnr Hooker St & Hutchins St, Yarralumla ACT 2600"
-    results.append((_assemble([f"Cnr {p_short} & {x_short}", locality]), "corner"))
+    results.append((_assemble([f"Cnr {p_short} & {x_short}", locality]), "corner", fvals))
     # "Corner Hooker Street And Hutchins Street, Yarralumla ACT 2600"
-    results.append((_assemble([f"Corner {p_full} And {x_full}", locality]), "corner"))
+    results.append((_assemble([f"Corner {p_full} And {x_full}", locality]), "corner",
+                     {**_canonical_fields(rec), "street_type": p_type or ""}))
     # "Cnr Hooker St/Hutchins St, Yarralumla ACT 2600"
-    results.append((_assemble([f"Cnr {p_short}/{x_short}", locality]), "corner"))
+    results.append((_assemble([f"Cnr {p_short}/{x_short}", locality]), "corner", fvals))
 
     # --- Both numbers ---
     if x_num:
         # "14 Hooker St & 43 Hutchins St, Yarralumla ACT 2600"
-        results.append((_assemble([f"{p_num} {p_short} & {x_num} {x_short}", locality]), "corner_both_numbers"))
+        results.append((_assemble([f"{p_num} {p_short} & {x_num} {x_short}", locality]), "corner_both_numbers", fvals))
         # "14 Hooker St / 43 Hutchins St, Yarralumla ACT 2600"
-        results.append((_assemble([f"{p_num} {p_short} / {x_num} {x_short}", locality]), "corner_both_numbers"))
+        results.append((_assemble([f"{p_num} {p_short} / {x_num} {x_short}", locality]), "corner_both_numbers", fvals))
         # "Cnr 14 Hooker St & 43 Hutchins St, Yarralumla ACT 2600"
-        results.append((_assemble([f"Cnr {p_num} {p_short} & {x_num} {x_short}", locality]), "corner_both_numbers"))
+        results.append((_assemble([f"Cnr {p_num} {p_short} & {x_num} {x_short}", locality]), "corner_both_numbers", fvals))
         # "14 Hooker Street, Cnr Hutchins Street, Yarralumla ACT 2600"
-        results.append((_assemble([f"{p_num} {p_full}", f"Cnr {x_full}", locality]), "corner_both_numbers"))
+        results.append((_assemble([f"{p_num} {p_full}", f"Cnr {x_full}", locality]), "corner_both_numbers",
+                         {**_canonical_fields(rec), "street_type": p_type or ""}))
 
     return results
 
 
 def perm_noisy(
     rec: AddressRecord, lookups: AbbrevLookups, rng: random.Random | None = None
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Noisy/dirty variant: random mutations (double space, missing space, etc.)."""
     if rng is None:
         rng = random.Random()
@@ -901,7 +958,7 @@ def perm_noisy(
     noisy = base
     for fn in chosen:
         noisy = fn(noisy)
-    return [(noisy, "noisy")]
+    return [(noisy, "noisy", _canonical_fields(rec))]
 
 
 # ---------------------------------------------------------------------------
@@ -951,24 +1008,28 @@ def generate_permutations(
     max_perms: int = 8,
     include_noisy: bool = False,
     rng: random.Random | None = None,
-) -> list[tuple[str, str]]:
+) -> list[tuple[str, str, dict[str, str]]]:
     """Generate up to max_perms permutations for a single AddressRecord.
 
     Always includes: canonical, street_abbrev_gnaf (if applicable), slash_notation (if unit).
     Randomly samples from the optional pool to reach max_perms.
     Deduplicates by formatted string before returning.
+
+    Returns triples of (formatted_address, permutation_type, field_values) where
+    field_values maps each FIELD_ORDER key to the token string that actually appears
+    in formatted_address for that field (empty string = field absent from string).
     """
     if rng is None:
         rng = random.Random()
 
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, dict[str, str]]] = []
 
     # Always-generated permutations
     for fn in _ALWAYS:
         results.extend(fn(rec, lookups))
 
     # Build pool of all applicable optional permutations
-    optional_pool: list[tuple[str, str]] = []
+    optional_pool: list[tuple[str, str, dict[str, str]]] = []
     for fn in _OPTIONAL:
         optional_pool.extend(fn(rec, lookups))
 
@@ -982,10 +1043,10 @@ def generate_permutations(
 
     # Deduplicate preserving order
     seen: set[str] = set()
-    unique: list[tuple[str, str]] = []
-    for addr, ptype in results:
+    unique: list[tuple[str, str, dict[str, str]]] = []
+    for addr, ptype, fvals in results:
         if addr not in seen and addr.strip():
             seen.add(addr)
-            unique.append((addr, ptype))
+            unique.append((addr, ptype, fvals))
 
     return unique
