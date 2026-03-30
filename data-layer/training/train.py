@@ -90,8 +90,8 @@ def main() -> None:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
-        help="Per-device train batch size. Effective batch = batch_size × gradient_accumulation_steps (default 2 → 64).",
+        default=64,
+        help="Per-device train batch size. Effective batch = batch_size × gradient_accumulation_steps (default 1 → 64).",
     )
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument(
@@ -140,8 +140,9 @@ def main() -> None:
 
     # ── Training arguments ────────────────────────────────────────────────────
     # Tuned for RTX 3060 12 GB:
-    #   batch_size=32 × gradient_accumulation_steps=2 → effective batch 64
+    #   batch_size=64 × gradient_accumulation_steps=1 → effective batch 64
     #   fp16=True saves ~40% VRAM and speeds up training on Ampere GPUs
+    #   num_workers=8 to keep GPU fed (high utilization at ~170W TDP)
 
     output_dir = str(args.output)
     training_args = TrainingArguments(
@@ -149,7 +150,7 @@ def main() -> None:
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size * 2,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=1,
         learning_rate=args.lr,
         weight_decay=0.01,
         warmup_ratio=0.06,
@@ -164,7 +165,7 @@ def main() -> None:
         greater_is_better=True,
         logging_steps=500,
         report_to="none",           # Disable wandb / tensorboard
-        dataloader_num_workers=4,
+        dataloader_num_workers=8,
     )
 
     trainer = Trainer(
