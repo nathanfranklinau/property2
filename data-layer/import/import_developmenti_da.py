@@ -480,28 +480,54 @@ def extract_detail(page: Page) -> dict:
     out = {}
 
     def get_field(label: str) -> str | None:
+        """Find a field by h5 label text, with flexible matching."""
+        # Try exact match first
         h5 = page.locator(f"h5:has-text('{label}')")
         if h5.count() == 0:
+            # Try partial match (contains instead of exact)
+            h5 = page.locator(f"h5:has-text('{label[:-1]}')")  # Remove trailing colon
+        if h5.count() == 0:
             return None
-        parent = h5.first.locator("xpath=..")
-        sibling = parent.locator("xpath=following-sibling::div")
-        if sibling.count() > 0:
-            text = sibling.first.text_content().strip()
-            return text if text else None
+
+        try:
+            parent = h5.first.locator("xpath=..")
+            # Try following-sibling::div first
+            sibling = parent.locator("xpath=following-sibling::div").first
+            if sibling and sibling.count() > 0:
+                text = sibling.text_content().strip()
+                return text if text else None
+
+            # Try following-sibling::span
+            sibling = parent.locator("xpath=following-sibling::span").first
+            if sibling and sibling.count() > 0:
+                text = sibling.text_content().strip()
+                return text if text else None
+
+            # Try next sibling of parent
+            sibling = parent.locator("xpath=following-sibling::div[1]").first
+            if sibling and sibling.count() > 0:
+                text = sibling.text_content().strip()
+                return text if text else None
+        except Exception as e:
+            log.debug(f"Error extracting field '{label}': {e}")
+
         return None
 
     def get_date_field(label: str) -> date | None:
         text = get_field(label)
         return _parse_rendered_date(text)
 
-    out["status"] = get_field("Progress:") or get_field("Progress Status:")
-    out["decision"] = get_field("Stage/Decision:") or get_field("Decision:")
-    out["application_type"] = get_field("Application Type:")
-    out["assessment_level"] = get_field("Assessment Level:")
-    out["use_categories"] = get_field("Use:")
-    out["assessment_officer"] = get_field("Assessment Officer:")
-    out["appeal_result"] = get_field("Appeal result:") or get_field("Appeal Result:")
-    out["lodgement_date"] = get_date_field("Date Submitted:") or get_date_field("Date Received:")
+    # Extract fields with multiple label variants
+    out["status"] = get_field("Progress:") or get_field("Progress Status:") or get_field("Progress")
+    out["decision"] = get_field("Stage/Decision:") or get_field("Decision:") or get_field("Stage")
+    out["application_type"] = get_field("Application Type:") or get_field("Application Type")
+    out["assessment_level"] = get_field("Assessment Level:") or get_field("Assessment Level")
+    out["use_categories"] = get_field("Use:") or get_field("Use")
+    out["applicant"] = get_field("Applicant:") or get_field("Applicant")
+    out["consultant"] = get_field("Consultant:") or get_field("Consultant")
+    out["assessment_officer"] = get_field("Assessment Officer:") or get_field("Assessment Officer")
+    out["appeal_result"] = get_field("Appeal result:") or get_field("Appeal Result:") or get_field("Appeal")
+    out["lodgement_date"] = get_date_field("Date Submitted:") or get_date_field("Date Received:") or get_date_field("Date")
 
     desc = get_field("Full Description:") or get_field("Description:")
     if desc:
@@ -903,16 +929,144 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
     log.info(f"  Updated {len(detail)} fields (JSON API)")
 
 
+def _enrich_via_modal(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str | None) -> None:
+    """Enrich via Bootstrap modal on search page (Ipswich pattern)."""
+    # Make sure we're on the search page
+    if "/MapSearch" not in page.url:
+        page.goto(search_url(cfg), wait_until="load", timeout=30000)
+        time.sleep(DELAY)
+
+    # Search for the application
+    search_input = page.locator("input[type='text']")
+    for i in range(search_input.count()):
+        placeholder = (search_input.nth(i).get_attribute("placeholder") or "").lower()
+        if "search" in placeholder or "application" in placeholder:
+            search_input.nth(i).fill(app_num)
+            search_input.nth(i).press("Enter")
+            break
+
+    time.sleep(DELAY)
+
+    # Close any open modals first
+    close_buttons = page.locator("button.close, button[aria-label='Close'], .modal .btn-close")
+    for i in range(close_buttons.count()):
+        try:
+            close_buttons.nth(i).click(timeout=1000)
+        except Exception:
+            pass
+    time.sleep(0.5)
+
+    # Click the Details button to open modal
+    detail_button = page.locator(f"a[data-id='{app_num}'].application-moreinfo").first
+    if detail_button.count() == 0:
+        log.warning(f"  {app_num} not found in search results")
+        upsert_detail(conn, cfg, app_num, {})
+        return
+
+    try:
+        detail_button.click(timeout=5000)
+    except Exception as e:
+        log.warning(f"  {app_num} click failed: {e}")
+        upsert_detail(conn, cfg, app_num, {})
+        return
+
+    time.sleep(2)
+
+    # Extract from modal
+    modal = page.locator("#divPrint")
+    if modal.count() == 0:
+        log.warning(f"  {app_num} modal did not appear")
+        upsert_detail(conn, cfg, app_num, {})
+        return
+
+    # Extract data from modal using h5 labels
+    detail = {}
+
+    def get_modal_field(label: str) -> str | None:
+        """Extract field from modal by h5 label."""
+        h5 = modal.locator(f"h5:has-text('{label}')")
+        if h5.count() == 0:
+            return None
+        parent = h5.first.locator("xpath=..")
+        value_div = parent.locator("xpath=following-sibling::div").first
+        if value_div and value_div.count() > 0:
+            text = value_div.text_content().strip()
+            return text if text else None
+        return None
+
+    # Extract all fields
+    detail["status"] = get_modal_field("Progress:")
+    detail["decision"] = get_modal_field("Stage/Decision:")
+    detail["application_type"] = get_modal_field("Application Type:")
+    detail["assessment_level"] = get_modal_field("Assessment Level:")
+    detail["use_categories"] = get_modal_field("Use:")
+    detail["applicant"] = get_modal_field("Applicant:")
+    detail["consultant"] = get_modal_field("Consultant:")
+    detail["assessment_officer"] = get_modal_field("Assessment Officer:")
+
+    # Date fields
+    lodgement_str = get_modal_field("Date Submitted:") or get_modal_field("Date Received:")
+    if lodgement_str:
+        detail["lodgement_date"] = _parse_rendered_date(lodgement_str)
+
+    # Description
+    desc = get_modal_field("Full Description:") or get_modal_field("Description:")
+    if desc:
+        detail["description"] = desc
+
+    # Associated properties from modal
+    properties = []
+    prop_links = modal.locator("a[href*='PropertyDetailsView?landNumber=']")
+    for i in range(prop_links.count()):
+        link = prop_links.nth(i)
+        href = link.get_attribute("href") or ""
+        m = re.search(r"landNumber=(\d+)", href)
+        if m:
+            land_number = m.group(1)
+            address = link.text_content().strip()
+            if " - " in address:
+                address = address.split(" - ")[0].strip()
+            properties.append({
+                "land_number": land_number,
+                "location_address": address,
+            })
+
+    if properties:
+        primary_cadastre, primary_suburb = upsert_da_properties(
+            conn, cfg, app_num, properties
+        )
+        if primary_suburb:
+            detail["suburb"] = primary_suburb
+        log.info(f"  {len(properties)} property row(s) — primary cadastre: {primary_cadastre}")
+    else:
+        log.info(f"  0 property row(s) — primary cadastre: None")
+
+    # Clean up None values
+    detail = {k: v for k, v in detail.items() if v is not None}
+
+    upsert_detail(conn, cfg, app_num, detail)
+    log.info(f"  Updated {len(detail)} fields")
+
+
 def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str | None) -> None:
-    """Enrich a single application from its detail page or JSON API."""
+    """Enrich a single application from its detail page or modal."""
     if not cfg["has_detail_pages"]:
         _enrich_via_json_api(page, conn, cfg, app_num, app_type)
         return
 
+    # For Ipswich (and similar portals), use modal approach instead of detail pages
+    if cfg["slug"] == "ipswich":
+        _enrich_via_modal(page, conn, cfg, app_num, app_type)
+        return
+
     param = cfg["detail_param"]
     url = f"{detail_url(cfg)}?{param}={app_num}&type=plan_development_apps"
-    page.goto(url, wait_until="networkidle", timeout=30000)
-    time.sleep(DELAY)
+    # Don't wait for networkidle - it often times out. Just wait for load and DOM to settle.
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    except Exception as e:
+        log.warning(f"  {app_num} page load error: {e} - attempting to extract anyway")
+    time.sleep(DELAY + 2)  # Extra wait for JS rendering
 
     # Check if redirected to home page (invalid app)
     if "/Home/MapSearch" in page.url or page.locator("h1:has-text('Development.i')").count() > 0:
