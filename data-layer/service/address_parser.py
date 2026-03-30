@@ -103,21 +103,32 @@ class AddressParser:
                 continue
 
             token_text = normalised[t_start:t_end]
-            is_continuation = (
-                prev_end is not None
-                and prev_end == t_start
-                and token_strings[i].startswith("##")
+            predicted_label = self._id_to_label[pred_id]
+            is_adjacent = prev_end is not None and prev_end == t_start
+            is_continuation = is_adjacent and (
+                token_strings[i].startswith("##")
+                or (
+                    # Adjacent non-subword token predicting the same field as the current
+                    # word (e.g. "-" in "Ron-Penhaligon" after the model predicts
+                    # B-STREET_NAME for both "ron" and "-"). Consecutive B- entries of the
+                    # same field are merged rather than overwriting each other.
+                    # This does NOT fire for "/" in "57/7" because "/" predicts O (a
+                    # different field), so unit_number and street_number stay separate.
+                    predicted_label != "O"
+                    and current_label != "O"
+                    and predicted_label.split("-", 1)[1] == current_label.split("-", 1)[1]
+                )
             )
 
             if is_continuation:
-                # WordPiece subword continuation: append text, keep the first subword's label.
+                # Continuation: append text, keep the first token's label.
                 current_text += token_text
             else:
-                # New word (or punctuation token): flush previous, start fresh.
+                # New word: flush previous, start fresh.
                 if current_text:
                     words.append((current_text, current_label))
                 current_text = token_text
-                current_label = self._id_to_label[pred_id]
+                current_label = predicted_label
 
             prev_end = t_end
 
