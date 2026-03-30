@@ -957,14 +957,14 @@ def _enrich_via_modal(page: Page, conn, cfg: CouncilConfig, app_num: str, app_ty
     time.sleep(0.5)
 
     # Click the Details button to open modal
-    detail_button = page.locator(f"a[data-id='{app_num}'].application-moreinfo").first
+    detail_button = page.locator(f"a[data-id='{app_num}'].application-moreinfo")
     if detail_button.count() == 0:
         log.warning(f"  {app_num} not found in search results")
         upsert_detail(conn, cfg, app_num, {})
         return
 
     try:
-        detail_button.click(timeout=5000)
+        detail_button.first.click(timeout=5000)
     except Exception as e:
         log.warning(f"  {app_num} click failed: {e}")
         upsert_detail(conn, cfg, app_num, {})
