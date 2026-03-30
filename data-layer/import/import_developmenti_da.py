@@ -930,47 +930,24 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
 
 
 def _enrich_via_modal(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str | None) -> None:
-    """Enrich via Bootstrap modal on search page (Ipswich pattern)."""
-    # Make sure we're on the search page
-    if "/MapSearch" not in page.url:
-        page.goto(search_url(cfg), wait_until="load", timeout=30000)
-        time.sleep(DELAY)
+    """Enrich via Bootstrap modal on detail page (Ipswich pattern).
 
-    # Search for the application
-    search_input = page.locator("input[type='text']")
-    for i in range(search_input.count()):
-        placeholder = (search_input.nth(i).get_attribute("placeholder") or "").lower()
-        if "search" in placeholder or "application" in placeholder:
-            search_input.nth(i).fill(app_num)
-            search_input.nth(i).press("Enter")
-            break
-
-    time.sleep(DELAY)
-
-    # Close any open modals first
-    close_buttons = page.locator("button.close, button[aria-label='Close'], .modal .btn-close")
-    for i in range(close_buttons.count()):
-        try:
-            close_buttons.nth(i).click(timeout=1000)
-        except Exception:
-            pass
-    time.sleep(0.5)
-
-    # Click the Details button to open modal
-    detail_button = page.locator(f"a[data-id='{app_num}'].application-moreinfo")
-    if detail_button.count() == 0:
-        log.warning(f"  {app_num} not found in search results")
-        upsert_detail(conn, cfg, app_num, {})
-        return
+    Uses direct URL access with appNo parameter instead of MapSearch,
+    which doesn't return all applications (e.g., older 2024/2025 apps).
+    """
+    # For Ipswich, use direct detail page URL with appNo parameter
+    # This works for all applications, not just those in MapSearch results
+    import urllib.parse
+    encoded_app = urllib.parse.quote(app_num, safe='')
+    url = f"{cfg['base_url']}/Home/ApplicationDetailsView?appNo={encoded_app}&type=plan_development_apps"
 
     try:
-        detail_button.first.click(timeout=5000)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(DELAY)
     except Exception as e:
-        log.warning(f"  {app_num} click failed: {e}")
+        log.warning(f"  {app_num} page load failed: {e}")
         upsert_detail(conn, cfg, app_num, {})
         return
-
-    time.sleep(2)
 
     # Extract from modal
     modal = page.locator("#divPrint")
