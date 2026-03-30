@@ -445,54 +445,12 @@ def _split_road(road: str) -> tuple[str | None, str | None]:
 def parse_location_address(addr: str | None) -> ParsedAddress:
     """Parse a free-text ePathway location address into structured fields.
 
-    Strips cadastral lot references first (_prepare_address), then delegates
-    to the pelias/libpostal-service REST API for parsing. The service must be
-    running (see docker-compose.yml at project root).
-
-    Handles formats seen in ePathway summary and property section rows:
-      "2 River Terrace"
-      "UNIT 4, 19 Santa Barbara Road"
-      "Lot 255 WD5121, 55 Eden Avenue, COOLANGATTA QLD 4225"
-      "BAL Lot 1 RP215138, 82 Cabbage Tree Point Road"
-      "Lot 303 SP289809"              ← bare lot ref, returns all-None
+    STUB (libpostal removed March 2026): Returns all-None until DistilBERT model
+    is trained and deployed. Will be replaced by model-based parsing.
     """
     out: ParsedAddress = {
         "unit_type": None, "unit_number": None, "unit_suffix": None,
         "street_number": None, "street_name": None, "street_type": None,
         "suburb": None, "postcode": None,
     }
-    if not addr:
-        return out
-
-    text = _prepare_address(addr.strip())
-    if not text:
-        return out  # bare lot ref, nothing parseable
-
-    # Extract unit_type before libpostal — libpostal drops type keywords (UNIT/SHOP/FLAT)
-    m = _RE_UNIT_PREFIX.match(text)
-    if m:
-        out["unit_type"] = m.group(1).upper()
-
-    for component in _libpostal_parse(text):
-        label = component["label"]
-        value = component["value"].strip()
-        if label == "house_number":
-            out["street_number"] = value
-        elif label == "unit":
-            # libpostal includes the type keyword in the value (e.g. "unit 4") — strip it
-            out["unit_number"] = re.sub(
-                r"^(UNIT|SHOP|FLAT|SUITE|VILLA|APT|APARTMENT)\s+",
-                "",
-                value,
-                flags=re.IGNORECASE,
-            )
-        elif label == "road":
-            out["street_name"], out["street_type"] = _split_road(value)
-        elif label in ("city", "suburb"):
-            # libpostal labels Australian suburbs as either "suburb" or "city" depending
-            # on how well-known the locality is — treat both the same
-            out["suburb"] = value.title()
-        elif label == "postcode":
-            out["postcode"] = value
-
     return out
