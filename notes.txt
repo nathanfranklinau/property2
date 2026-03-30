@@ -1,0 +1,1 @@
+curl -s -X POST http://localhost:8001/parse-address -H "Content-Type: application/json" -d '{"address": "Unit 5, 42 Smith Street, Southport QLD 4215"}'
