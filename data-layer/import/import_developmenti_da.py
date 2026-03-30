@@ -68,7 +68,8 @@ class CouncilConfig(TypedDict):
     full_start_date: str        # ISO date string for --full start
     groups: dict                # Application group configs
     filter_panel_selector: str  # CSS selector for the filter panel
-    filter_panel_needs_show: bool   # True if panel is hidden by default and must be forced visible
+    filter_panel_needs_show: bool   # True if panel is hidden and must be force-shown (non-Ipswich portals)
+    filter_panel_toggle_selector: str | None  # If set, click this to open/close the panel instead of force-show
     date_input_selector: str    # CSS selector for the daterangepicker input
     group_select_id: str        # ID of the application group <select>
     status_filter_id: str       # ID of the status/application type <select> (e.g. "filter-status-type" for "All")
@@ -103,7 +104,8 @@ COUNCILS: dict[str, CouncilConfig] = {
         "full_start_date": "2018-01-01",
         "groups": _GROUPS_DA_ONLY,
         "filter_panel_selector": "#search-filters",
-        "filter_panel_needs_show": True,
+        "filter_panel_needs_show": False,
+        "filter_panel_toggle_selector": "h2.mobile-filters",
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
         "status_filter_id": "filter-status-type",
@@ -112,7 +114,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
-        "api_search_endpoint": "https://developmenti.ipswich.qld.gov.au/Home/ApplicationTileSearch",
+        "api_search_endpoint": None,
     },
     "redland": {
         "name": "Redland",
@@ -125,6 +127,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         # Redland uses div#filter-container, which is not hidden by default
         "filter_panel_selector": "#filter-container",
         "filter_panel_needs_show": False,
+        "filter_panel_toggle_selector": None,
         "date_input_selector": "input[name='daterange']",
         "group_select_id": "filter-application-group",
         "status_filter_id": "",
@@ -145,6 +148,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "groups": _GROUPS_DA_BA_PLUMB,
         "filter_panel_selector": "#search-filters",
         "filter_panel_needs_show": True,
+        "filter_panel_toggle_selector": None,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
         "status_filter_id": "",
@@ -165,6 +169,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "groups": _GROUPS_DA_ONLY,
         "filter_panel_selector": "#search-filters",
         "filter_panel_needs_show": True,
+        "filter_panel_toggle_selector": None,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
         "status_filter_id": "",
@@ -188,6 +193,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         # Filter panel is visible by default on WDRC — no force-show needed
         "filter_panel_selector": "#search-filters",
         "filter_panel_needs_show": False,
+        "filter_panel_toggle_selector": None,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
         "status_filter_id": "",
@@ -305,91 +311,114 @@ def set_filters(
     """Set the search filters on the MapSearch page."""
     log.info(f"Setting filters: group={group}, {from_date} → {to_date}")
 
-    panel_sel = cfg["filter_panel_selector"]
-
-    # Wait for filter panel to exist in DOM
-    page.wait_for_selector(panel_sel, state="attached", timeout=20000)
-    time.sleep(0.5)
-
-    # Some portals (Brisbane, Ipswich, Sunshine Coast, Toowoomba) hide the
-    # filter panel on desktop and require a JS force-show before interacting.
-    # Others (Redland, Western Downs) leave it visible — no action needed.
-    if cfg["filter_panel_needs_show"]:
-        page.evaluate(f"""
-            document.querySelector('{panel_sel}').style.display = 'block';
-        """)
-        time.sleep(0.5)
-
-    # 1. Set application group first — changing this fires AJAX which may re-render
-    # the form (resetting other filters), so it must come before the status filter.
-    group_id = cfg["group_select_id"]
-    group_value = group.lower()
-    page.evaluate(f"""() => {{
-        const sel = document.getElementById('{group_id}');
-        if (sel) {{
-            sel.value = '{group_value}';
-            sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
-        }}
-    }}""")
-    time.sleep(2.0)
-
-    # 2. Set status filter after group AJAX has settled (e.g., Ipswich needs "all").
-    # Use Playwright's select_option with force=True — the panel may be display:block
-    # but not in the viewport, so force bypasses the visibility check.
-    status_id = cfg["status_filter_id"]
-    status_val = cfg["status_filter_value"]
-    if status_id and status_val:
-        page.locator(f"#{status_id}").select_option(status_val, force=True)
-        time.sleep(0.5)
-
-    # 2. Open date range dropdown if it exists
-    page.evaluate("""() => {
-        const dropdown = document.getElementById('date-range-dropdown');
-        if (dropdown) dropdown.style.display = 'block';
-    }""")
-    time.sleep(0.3)
-
-    # 3. Select "Submitted" radio if present
-    page.evaluate("""() => {
-        const r = document.getElementById('status-submitted');
-        if (r) { r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); }
-    }""")
-    time.sleep(0.3)
-
-    # 4. Set date range via daterangepicker jQuery plugin
     from_str = from_date.strftime("%d/%m/%Y")
     to_str = to_date.strftime("%d/%m/%Y")
-    date_sel = cfg["date_input_selector"]
+    toggle_sel = cfg["filter_panel_toggle_selector"]
 
-    # Escape single quotes so the selector can be safely embedded in JS
-    date_sel_js = date_sel.replace("'", "\\'")
-    set_result = page.evaluate(f"""() => {{
-        try {{
-            var jq = window.jQuery || window.$;
-            if (!jq) return 'no jQuery';
-            var el = jq('{date_sel_js}')[0];
-            if (!el) return 'no date input';
-            var picker = jq(el).data('daterangepicker');
-            if (!picker) return 'no picker';
-            picker.setStartDate('{from_str}');
-            picker.setEndDate('{to_str}');
-            var val = picker.startDate.format('DD/MM/YYYY') + picker.locale.separator + picker.endDate.format('DD/MM/YYYY');
-            jq(el).val(val);
-            jq(el).trigger('apply.daterangepicker', picker);
-            return 'ok: ' + val;
-        }} catch(e) {{ return 'error: ' + e.message; }}
-    }}""")
-    log.info(f"Daterangepicker set: {set_result}")
-    time.sleep(DELAY)
+    if toggle_sel:
+        # Toggle-style portals (Ipswich): click the toggle to open the panel,
+        # interact with visible elements natively, then click again to close.
+        # Dates are filled directly into the daterangepicker inputs — the jQuery
+        # picker API is unreliable when the panel is toggled programmatically.
+        page.locator(toggle_sel).click()
+        time.sleep(0.5)
 
-    _dismiss_error_dialog(page)
+        status_id = cfg["status_filter_id"]
+        status_val = cfg["status_filter_value"]
+        if status_id and status_val:
+            page.locator(f"#{status_id}").select_option(status_val)
+            time.sleep(0.5)
 
-    # Re-hide the filter panel (only if we forced it visible) so it doesn't
-    # intercept clicks on the CSV download button.
-    if cfg["filter_panel_needs_show"]:
-        page.evaluate(f"""
-            document.querySelector('{panel_sel}').style.display = 'none';
-        """)
+        page.locator("#show-daterange").click()
+        time.sleep(0.5)
+
+        page.locator('#date-range-dropdown input[name="status"][value="submitted"]').check()
+        time.sleep(0.3)
+
+        page.locator(cfg["date_input_selector"]).click()
+        time.sleep(0.5)
+
+        page.locator('input[name="daterangepicker_start"]').fill(from_str)
+        time.sleep(0.3)
+        page.locator('input[name="daterangepicker_end"]').fill(to_str)
+        time.sleep(0.3)
+
+        page.locator(".daterangepicker button.applyBtn").click()
+        time.sleep(DELAY)
+
+        _dismiss_error_dialog(page)
+
+        # Close panel so it doesn't intercept the download button click.
+        page.locator(toggle_sel).click()
+        time.sleep(0.5)
+
+    else:
+        # Standard portals: force-show the panel (if hidden), set group first
+        # (AJAX may reset other filters), then set status + date range via jQuery.
+        panel_sel = cfg["filter_panel_selector"]
+        page.wait_for_selector(panel_sel, state="attached", timeout=20000)
+        time.sleep(0.5)
+
+        if cfg["filter_panel_needs_show"]:
+            page.evaluate(f"document.querySelector('{panel_sel}').style.display = 'block';")
+            time.sleep(0.5)
+
+        # Group first — its change event fires AJAX that may reset other filters.
+        group_id = cfg["group_select_id"]
+        page.evaluate(f"""() => {{
+            const sel = document.getElementById('{group_id}');
+            if (sel) {{
+                sel.value = '{group.lower()}';
+                sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        }}""")
+        time.sleep(2.0)
+
+        status_id = cfg["status_filter_id"]
+        status_val = cfg["status_filter_value"]
+        if status_id and status_val:
+            page.locator(f"#{status_id}").select_option(status_val, force=True)
+            time.sleep(0.5)
+
+        # Open date-range dropdown
+        page.evaluate("""() => {
+            const d = document.getElementById('date-range-dropdown');
+            if (d) d.style.display = 'block';
+        }""")
+        time.sleep(0.3)
+
+        # Select "Submitted" radio
+        page.evaluate("""() => {
+            const r = document.getElementById('status-submitted');
+            if (r) { r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); }
+        }""")
+        time.sleep(0.3)
+
+        # Set date range via daterangepicker jQuery plugin
+        date_sel_js = cfg["date_input_selector"].replace("'", "\\'")
+        set_result = page.evaluate(f"""() => {{
+            try {{
+                var jq = window.jQuery || window.$;
+                if (!jq) return 'no jQuery';
+                var el = jq('{date_sel_js}')[0];
+                if (!el) return 'no date input';
+                var picker = jq(el).data('daterangepicker');
+                if (!picker) return 'no picker';
+                picker.setStartDate('{from_str}');
+                picker.setEndDate('{to_str}');
+                var val = picker.startDate.format('DD/MM/YYYY') + picker.locale.separator + picker.endDate.format('DD/MM/YYYY');
+                jq(el).val(val);
+                jq(el).trigger('apply.daterangepicker', picker);
+                return 'ok: ' + val;
+            }} catch(e) {{ return 'error: ' + e.message; }}
+        }}""")
+        log.info(f"Daterangepicker set: {set_result}")
+        time.sleep(DELAY)
+
+        _dismiss_error_dialog(page)
+
+        if cfg["filter_panel_needs_show"]:
+            page.evaluate(f"document.querySelector('{panel_sel}').style.display = 'none';")
 
 
 def download_csv(page: Page) -> str:
