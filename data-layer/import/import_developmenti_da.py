@@ -32,14 +32,15 @@ Prerequisites:
 import argparse
 import csv
 import io
+import json
 import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import TypedDict
 
-from playwright.sync_api import sync_playwright, Page
+from playwright.sync_api import sync_playwright, BrowserContext, Page
 
 from da_common import (
     USER_AGENT,
@@ -70,10 +71,13 @@ class CouncilConfig(TypedDict):
     filter_panel_needs_show: bool   # True if panel is hidden by default and must be forced visible
     date_input_selector: str    # CSS selector for the daterangepicker input
     group_select_id: str        # ID of the application group <select>
+    status_filter_id: str       # ID of the status/application type <select> (e.g. "filter-status-type" for "All")
+    status_filter_value: str    # Value to set for status filter (e.g. "all" for Ipswich to get all applications)
     detail_param: str           # Query parameter name for detail page (e.g. id, appNo, ApplicationId)
     has_detail_pages: bool      # False if portal uses AJAX modals only (no standalone detail pages)
     description_addr_at_end: bool   # True if address appears at END of description (Toowoomba format)
     ignore_https_errors: bool   # True for portals with expired SSL certs (e.g. Western Downs)
+    api_search_endpoint: str | None  # Direct JSON API endpoint; if set, bypasses browser CSV download
 
 
 # ── Council configurations ────────────────────────────────────────────────────
@@ -102,10 +106,13 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
+        "status_filter_id": "filter-status-type",
+        "status_filter_value": "all",
         "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "api_search_endpoint": "https://developmenti.ipswich.qld.gov.au/Home/ApplicationTileSearch",
     },
     "redland": {
         "name": "Redland",
@@ -120,10 +127,13 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": False,
         "date_input_selector": "input[name='daterange']",
         "group_select_id": "filter-application-group",
+        "status_filter_id": "",
+        "status_filter_value": "",
         "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "api_search_endpoint": None,
     },
     "sunshinecoast": {
         "name": "Sunshine Coast",
@@ -137,10 +147,13 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
+        "status_filter_id": "",
+        "status_filter_value": "",
         "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "api_search_endpoint": None,
     },
     "toowoomba": {
         "name": "Toowoomba",
@@ -154,12 +167,15 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
+        "status_filter_id": "",
+        "status_filter_value": "",
         "detail_param": "appNo",
         "has_detail_pages": True,
         # Toowoomba description format: "Proposal - ADDRESS SUBURB QLD POSTCODE"
         # Address is at the END, not the start (opposite to Brisbane).
         "description_addr_at_end": True,
         "ignore_https_errors": False,
+        "api_search_endpoint": None,
     },
     "westerndowns": {
         "name": "Western Downs",
@@ -174,6 +190,8 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": False,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
+        "status_filter_id": "",
+        "status_filter_value": "",
         "detail_param": "id",
         # WDRC uses AJAX modals only — no standalone ApplicationDetailsView.
         # Enrichment falls back to the /Geo/GetApplicationById JSON API.
@@ -181,6 +199,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "description_addr_at_end": False,
         # SSL certificate is expired — suppress cert validation errors.
         "ignore_https_errors": True,
+        "api_search_endpoint": None,
     },
 }
 
@@ -301,7 +320,8 @@ def set_filters(
         """)
         time.sleep(0.5)
 
-    # 1. Set application group
+    # 1. Set application group first — changing this fires AJAX which may re-render
+    # the form (resetting other filters), so it must come before the status filter.
     group_id = cfg["group_select_id"]
     group_value = group.lower()
     page.evaluate(f"""() => {{
@@ -312,6 +332,15 @@ def set_filters(
         }}
     }}""")
     time.sleep(2.0)
+
+    # 2. Set status filter after group AJAX has settled (e.g., Ipswich needs "all").
+    # Use Playwright's select_option with force=True — the panel may be display:block
+    # but not in the viewport, so force bypasses the visibility check.
+    status_id = cfg["status_filter_id"]
+    status_val = cfg["status_filter_value"]
+    if status_id and status_val:
+        page.locator(f"#{status_id}").select_option(status_val, force=True)
+        time.sleep(0.5)
 
     # 2. Open date range dropdown if it exists
     page.evaluate("""() => {
@@ -780,6 +809,269 @@ def upsert_da_properties(
     conn.commit()
     cur.close()
     return primary_cadastre, primary_suburb
+
+
+# ── Direct API scrape (Ipswich and any future portal with known JSON endpoint) ─
+
+_AEST = timezone(timedelta(hours=10))
+
+
+def _to_epoch_ms(d: date, end_of_day: bool = False) -> int:
+    """Convert a local date to Unix epoch milliseconds (AEST, UTC+10)."""
+    dt = datetime(d.year, d.month, d.day, tzinfo=_AEST)
+    base_ms = int(dt.timestamp() * 1000)
+    # End of day: +23:59:59.999 = 86_400_000 - 1 ms
+    return base_ms + 86_400_000 - 1 if end_of_day else base_ms
+
+
+def _parse_tile_response(html: str) -> tuple[list[dict], int]:
+    """Parse an ApplicationTileSearch HTML tile response.
+
+    Returns (records, total_count) where total_count is parsed from
+    the 'N of M applications' span so callers can page correctly.
+    """
+    # Total: "63 of 63 applications"
+    count_m = re.search(
+        r'<span class="application-count">(\d+) of (\d+) applications</span>', html
+    )
+    total_count = int(count_m.group(2)) if count_m else 0
+
+    # Each inline script carries: var appKey = 'APP'; getReference(..., 'STATUS', ...)
+    # Build a map so we can look up status by app number.
+    status_map: dict[str, str] = {}
+    for sm in re.finditer(
+        r"var appKey = '([^']+)'.*?getReference\([^,]+,\s*appKey,\s*'([^']+)'",
+        html, re.DOTALL,
+    ):
+        status_map[sm.group(1)] = sm.group(2)
+
+    tile_blocks = re.findall(
+        r'<div class="application-tile col-md-12 cf"(.*?)(?=<div class="application-tile|$)',
+        html, re.DOTALL,
+    )
+
+    records: list[dict] = []
+    for tile in tile_blocks:
+        app_m = re.search(r'<h5>Application Number:\s*(.+?)</h5>', tile)
+        if not app_m:
+            continue
+        app_num = app_m.group(1).strip()
+
+        date_m = re.search(r'data-date-number="(\d+)"', tile)
+        epoch_ms = int(date_m.group(1)) if date_m else None
+
+        desc_m = re.search(r'<span>Description:</span>\s*(.*?)</p>', tile, re.DOTALL)
+        description = re.sub(r'\s+', ' ', desc_m.group(1)).strip() if desc_m else None
+
+        records.append({
+            "AppNo": app_num,
+            "DateSubmitted": epoch_ms,
+            "Description": description,
+            "Progress": status_map.get(app_num),
+        })
+
+    return records, total_count
+
+
+def _api_post(context: BrowserContext, endpoint: str, payload: dict) -> tuple[list[dict], int]:
+    """POST JSON via the browser context; returns (records, total_count).
+
+    Handles both JSON (future councils) and HTML tile responses (Ipswich).
+    """
+    resp = context.request.post(
+        endpoint,
+        data=json.dumps(payload),
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    if not resp.ok:
+        log.error(f"API HTTP {resp.status}: {resp.text()[:500]}")
+        raise RuntimeError(f"API returned HTTP {resp.status}")
+
+    text = resp.text()
+
+    # Try JSON first
+    try:
+        result = resp.json()
+        if isinstance(result, list):
+            return result, len(result)
+        for key in ("records", "results", "data", "items", "applications", "Results", "Records"):
+            if isinstance(result, dict) and key in result:
+                lst = result[key]
+                total = result.get("total") or result.get("Total") or len(lst)
+                return lst, int(total)
+        return [], 0
+    except Exception:
+        pass
+
+    # Fall back to HTML tile parsing
+    return _parse_tile_response(text)
+
+
+def map_api_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
+    """Map an ApplicationTileSearch response record to our DB columns."""
+    app_num = (
+        row.get("AppNo") or row.get("ApplicationNumber") or row.get("applicationNumber")
+        or row.get("DANumber") or row.get("Id") or row.get("id")
+    )
+    if not app_num:
+        return None
+
+    date_raw = (
+        row.get("DateSubmitted") or row.get("SubmittedDate") or row.get("LodgementDate")
+        or row.get("dateSubmitted") or row.get("Date")
+    )
+    lodgement_date = None
+    if isinstance(date_raw, (int, float)) and date_raw > 0:
+        lodgement_date = datetime.utcfromtimestamp(date_raw / 1000).date()
+    elif isinstance(date_raw, str) and date_raw:
+        for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                lodgement_date = datetime.strptime(date_raw[:19], fmt).date()
+                break
+            except ValueError:
+                continue
+
+    description = (
+        row.get("FullDescription") or row.get("Description") or row.get("description")
+        or row.get("Proposal")
+    )
+    status = row.get("Progress") or row.get("Status") or row.get("progress")
+    address = (
+        row.get("Address") or row.get("PrimaryAddress") or row.get("LocationAddress")
+        or row.get("address") or row.get("primaryAddress")
+    )
+    if not address and description:
+        address = _extract_description_address(description)
+    app_type = row.get("ApplicationType") or row.get("AppType") or row.get("applicationType")
+    suburb = row.get("Suburb") or row.get("Locality") or row.get("suburb")
+    decision = row.get("Decision") or row.get("Stage") or row.get("StageDecision")
+    assessment_level = row.get("AssessmentLevel") or row.get("assessmentLevel")
+    csv_group = row.get("ApplicationGroup") or row.get("AppGroup")
+    group_label = csv_group if csv_group else groups_cfg[group]["label"]
+
+    return {
+        "application_number": str(app_num).strip(),
+        "description": description,
+        "application_type": app_type,
+        "application_group": group_label,
+        "lodgement_date": lodgement_date,
+        "status": status,
+        "decision": decision,
+        "assessment_level": assessment_level,
+        "suburb": suburb,
+        "location_address": address,
+        "monitoring_status": monitoring_status_for(status),
+    }
+
+
+def run_scrape_api(conn, cfg: CouncilConfig, args) -> None:
+    """Scrape via direct JSON API using a browser context for the POST requests."""
+    endpoint = cfg["api_search_endpoint"]
+    today = date.today()
+    full_start = date.fromisoformat(cfg["full_start_date"])
+
+    if args.from_date and args.to_date:
+        from_d = date.fromisoformat(args.from_date)
+        to_d = min(date.fromisoformat(args.to_date), today)
+        ranges = month_ranges(from_d, to_d)
+    elif args.full:
+        ranges = month_ranges(full_start, today)
+    else:
+        from_d = today - timedelta(days=args.days)
+        ranges = [(from_d, today)]
+
+    groups_cfg = cfg["groups"]
+    groups_to_scrape = [args.group] if args.group else list(groups_cfg.keys())
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=not args.headed)
+        context = browser.new_context(
+            user_agent=USER_AGENT,
+            ignore_https_errors=cfg["ignore_https_errors"],
+        )
+        try:
+            # Load the portal first to establish session cookies before API calls.
+            page = context.new_page()
+            page.set_default_timeout(30000)
+            log.info(f"Loading portal: {search_url(cfg)}")
+            page.goto(search_url(cfg), wait_until="networkidle", timeout=60000)
+
+            total_upserted = 0
+            for group in groups_to_scrape:
+                g_cfg = groups_cfg[group]
+                log.info(f"=== Group: {g_cfg['label']} ===")
+                for i, (from_d, to_d) in enumerate(ranges, 1):
+                    log.info(f"[{i}/{len(ranges)}] {from_d} → {to_d}")
+                    records = []
+                    start_index = 0
+                    max_records = 200
+
+                    while True:
+                        payload = {
+                            "Progress": "all",
+                            "StartDateUnixEpochNumber": _to_epoch_ms(from_d),
+                            "EndDateUnixEpochNumber": _to_epoch_ms(to_d, end_of_day=True),
+                            "DateRangeField": "submitted",
+                            "DateRangeDescriptor": None,
+                            "LotPlan": None,
+                            "LandNumber": None,
+                            "PropNumber": None,
+                            "DANumber": None,
+                            "BANumber": None,
+                            "PlumbNumber": None,
+                            "IncludeDA": g_cfg["include_da"],
+                            "IncludeBA": g_cfg["include_ba"],
+                            "IncludePlumb": g_cfg["include_plumb"],
+                            "LocalityId": None,
+                            "DivisionId": None,
+                            "ApplicationTypeId": None,
+                            "SubCategoryUseId": None,
+                            "AssessmentLevels": [],
+                            "ShowCode": True,
+                            "ShowImpact": True,
+                            "ShowOther": True,
+                            "ShowIAGA": True,
+                            "ShowIAGI": True,
+                            "ShowNotifiableCode": True,
+                            "ShowReferralResponse": True,
+                            "ShowRequest": True,
+                            "PagingStartIndex": start_index,
+                            "MaxRecords": max_records,
+                            "SortField": "submitted",
+                            "SortAscending": False,
+                        }
+
+                        try:
+                            page_results, page_total = _api_post(context, endpoint, payload)
+                        except Exception as e:
+                            log.error(f"  API error at index {start_index}: {e}")
+                            break
+
+                        if not page_results:
+                            break
+
+                        if start_index == 0:
+                            log.info(f"  Total in period: {page_total}")
+
+                        for row in page_results:
+                            mapped = map_api_record(row, group, groups_cfg)
+                            if mapped:
+                                records.append(mapped)
+
+                        start_index += len(page_results)
+                        if start_index >= page_total or len(page_results) < max_records:
+                            break  # all pages fetched
+
+                    if records:
+                        count = upsert_summary(conn, cfg, records)
+                        total_upserted += count
+                        log.info(f"  Upserted {count} records")
+                    else:
+                        log.info("  No records found")
+
+            log.info(f"Scrape complete. Total upserted: {total_upserted}")
+        finally:
+            browser.close()
 
 
 # ── High-level modes ─────────────────────────────────────────────────────────
@@ -1318,6 +1610,8 @@ def run(cfg: CouncilConfig) -> None:
             run_enrich(conn, cfg, args)
         elif args.monitor:
             run_monitor(conn, cfg, args)
+        elif cfg["api_search_endpoint"]:
+            run_scrape_api(conn, cfg, args)
         else:
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=not args.headed)
