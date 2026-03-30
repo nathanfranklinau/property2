@@ -8,8 +8,8 @@ Two parsers are exposed:
 import sys
 import os
 
-# da_common lives in data-layer/import/
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "import"))
+# da_common lives in data-layer/import/da/
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "import", "da"))
 
 from da_common import parse_location_address, parse_brisbane_address
 from .base import ParsedResult, empty_result
