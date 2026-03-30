@@ -102,8 +102,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
-        # Detail page uses ?type=plan_development_apps&id=APP_NUMBER
-        "detail_param": "id",
+        "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
@@ -121,7 +120,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": False,
         "date_input_selector": "input[name='daterange']",
         "group_select_id": "filter-application-group",
-        "detail_param": "applicationNumber",
+        "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
@@ -138,8 +137,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
-        # Sunshine Coast uses ?ApplicationId= (capital A)
-        "detail_param": "ApplicationId",
+        "detail_param": "appNo",
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
@@ -156,7 +154,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "filter_panel_needs_show": True,
         "date_input_selector": "#dateRangeInput",
         "group_select_id": "filter-application-group",
-        "detail_param": "id",
+        "detail_param": "appNo",
         "has_detail_pages": True,
         # Toowoomba description format: "Proposal - ADDRESS SUBURB QLD POSTCODE"
         # Address is at the END, not the start (opposite to Brisbane).
@@ -396,7 +394,7 @@ def parse_csv(content: str) -> list[dict]:
     return records
 
 
-def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
+def map_csv_record(row: dict, group: str, groups_cfg: dict, *, addr_at_end: bool = False) -> dict | None:
     """Map a CSV row to our DB column names.
 
     Development.i CSV columns vary slightly between councils but the
@@ -448,11 +446,8 @@ def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
     assessment_level = row.get("assessment level")
 
     # If no separate address column, try extracting from description.
-    # Pass addr_at_end=False here — CSV scrape has no config context.
-    # Councils where address is at end (Toowoomba) still provide the address
-    # embedded in the description; enrichment will refine it from the detail page.
     if not address and description:
-        address = _extract_description_address(description, addr_at_end=False)
+        address = _extract_description_address(description, addr_at_end=addr_at_end)
 
     # Prefer application_group from CSV if present (Ipswich includes it)
     csv_group = row.get("application group")
@@ -475,7 +470,7 @@ def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
 
 # ── Detail page extraction ───────────────────────────────────────────────────
 
-def extract_detail(page: Page) -> dict:
+def extract_detail(page: Page, addr_at_end: bool = False) -> dict:
     """Extract all data from a Development.i detail page."""
     out = {}
 
@@ -532,7 +527,7 @@ def extract_detail(page: Page) -> dict:
     desc = get_field("Full Description:") or get_field("Description:")
     if desc:
         out["description"] = desc
-        address_part = _extract_description_address(desc)
+        address_part = _extract_description_address(desc, addr_at_end=addr_at_end)
         if address_part:
             out["location_address"] = address_part
 
@@ -612,11 +607,13 @@ def upsert_summary(conn, cfg: CouncilConfig, records: list[dict]) -> int:
     sql = f"""
         INSERT INTO {table}
             (application_number, description, application_type, application_group,
-             lodgement_date, status, suburb, location_address,
+             lodgement_date, status, decision, assessment_level,
+             suburb, location_address,
              monitoring_status, last_scraped_at)
         VALUES
             (%(application_number)s, %(description)s, %(application_type)s,
              %(application_group)s, %(lodgement_date)s, %(status)s,
+             %(decision)s, %(assessment_level)s,
              %(suburb)s, %(location_address)s,
              %(monitoring_status)s, NOW())
         ON CONFLICT (application_number) DO UPDATE SET
@@ -625,6 +622,8 @@ def upsert_summary(conn, cfg: CouncilConfig, records: list[dict]) -> int:
             application_group = COALESCE(EXCLUDED.application_group, {table}.application_group),
             lodgement_date   = COALESCE(EXCLUDED.lodgement_date, {table}.lodgement_date),
             status           = EXCLUDED.status,
+            decision         = COALESCE(EXCLUDED.decision, {table}.decision),
+            assessment_level = COALESCE(EXCLUDED.assessment_level, {table}.assessment_level),
             suburb           = COALESCE(EXCLUDED.suburb, {table}.suburb),
             location_address = COALESCE(EXCLUDED.location_address, {table}.location_address),
             monitoring_status = EXCLUDED.monitoring_status,
@@ -672,9 +671,8 @@ def upsert_detail(conn, cfg: CouncilConfig, application_number: str, detail: dic
         # Parsed categories
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to",
-        # Parsed address
-        "street_number", "street_name", "street_type",
-        "unit_type", "unit_number", "unit_suffix", "postcode",
+        # NOTE: parsed address columns (street_number, street_name, etc.)
+        # live on the child table only — handled by upsert_da_properties.
     ]
     for col in detail_columns:
         if col in detail and detail[col] is not None:
@@ -826,7 +824,7 @@ def run_scrape(page: Page, conn, cfg: CouncilConfig, args) -> None:
 
                 records = []
                 for row in rows:
-                    mapped = map_csv_record(row, group, groups_cfg)
+                    mapped = map_csv_record(row, group, groups_cfg, addr_at_end=cfg["description_addr_at_end"])
                     if mapped:
                         records.append(mapped)
 
@@ -864,22 +862,38 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
         upsert_detail(conn, cfg, app_num, {})
         return
 
-    detail: dict = {}
-    detail["status"] = response.get("progress")
-    detail["decision"] = response.get("stage")
-    detail["application_type"] = response.get("applicationType")
-    detail["assessment_level"] = response.get("assessmentLevel")
-    detail["description"] = response.get("description")
-    detail["use_categories"] = response.get("useLevel1")
+    # Response is GeoJSON FeatureCollection — extract properties from first feature
+    features = response.get("features", [])
+    props = features[0]["properties"] if features else {}
+    if not props:
+        log.warning(f"  {app_num} JSON API returned no features")
+        upsert_detail(conn, cfg, app_num, {})
+        return
 
-    # Parse date fields from epoch ms
+    detail: dict = {}
+    detail["status"] = props.get("progress")
+    detail["decision"] = props.get("decision_desc")
+    detail["application_type"] = props.get("application_type") or props.get("group_desc")
+    detail["assessment_level"] = props.get("assessment_level")
+    detail["description"] = props.get("description")
+    detail["use_categories"] = props.get("uselevel1")
+    detail["assessment_officer"] = props.get("project_officer")
+    detail["appeal_result"] = props.get("appeal_result")
+
+    # Parse date fields — ISO format (e.g. "2026-03-26T00:00:00Z")
     for json_key, db_col in [
-        ("dateReceived", "lodgement_date"),
-        ("dateDecided", "decision_notice_date"),
+        ("date_received", "lodgement_date"),
+        ("date_determined", "decision_notice_date"),
+        ("date_created", "record_creation_date"),
     ]:
-        ms = response.get(json_key)
-        if ms and isinstance(ms, (int, float)) and ms > 0:
-            detail[db_col] = datetime.utcfromtimestamp(ms / 1000).date()
+        date_val = props.get(json_key)
+        if date_val and isinstance(date_val, str):
+            try:
+                detail[db_col] = datetime.fromisoformat(date_val.replace("Z", "+00:00")).date()
+            except ValueError:
+                pass
+        elif date_val and isinstance(date_val, (int, float)) and date_val > 0:
+            detail[db_col] = datetime.utcfromtimestamp(date_val / 1000).date()
 
     # Extract address from description if present
     desc = detail.get("description")
@@ -901,15 +915,13 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
             if v is not None:
                 detail.setdefault(k, v)
 
-    # Associated properties from JSON
-    properties = response.get("associatedProperties", [])
+    # Associated properties — JSON has land_no on the feature, not a separate array.
+    # Visit PropertyDetailsView to get lot_on_plan and address.
     enriched_properties = []
-    for prop in properties:
-        enriched_properties.append({
-            "land_number": str(prop.get("landNumber", "")),
-            "lot_on_plan": prop.get("lotPlan"),
-            "location_address": prop.get("address"),
-        })
+    land_no = props.get("land_no")
+    if land_no:
+        prop_data = extract_property_lot(page, cfg, str(land_no))
+        enriched_properties.append(prop_data)
 
     primary_cadastre, primary_suburb = upsert_da_properties(
         conn, cfg, app_num, enriched_properties
@@ -1036,8 +1048,10 @@ def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str
         _enrich_via_modal(page, conn, cfg, app_num, app_type)
         return
 
+    import urllib.parse
     param = cfg["detail_param"]
-    url = f"{detail_url(cfg)}?{param}={app_num}&type=plan_development_apps"
+    encoded_app = urllib.parse.quote(app_num, safe="")
+    url = f"{detail_url(cfg)}?{param}={encoded_app}&type=plan_development_apps"
     # Don't wait for networkidle - it often times out. Just wait for load and DOM to settle.
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -1052,15 +1066,7 @@ def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str
             upsert_detail(conn, cfg, app_num, {})
             return
 
-    detail = extract_detail(page)
-
-    # For portals where address is embedded at end of description, extract it.
-    if cfg["description_addr_at_end"] and not detail.get("location_address"):
-        desc_for_addr = detail.get("description")
-        if desc_for_addr:
-            extracted = _extract_description_address(desc_for_addr, addr_at_end=True)
-            if extracted:
-                detail["location_address"] = extracted
+    detail = extract_detail(page, addr_at_end=cfg["description_addr_at_end"])
 
     # Parse description into categories
     desc = detail.get("description")
