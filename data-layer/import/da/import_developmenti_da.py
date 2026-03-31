@@ -36,6 +36,7 @@ import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import quote
 from datetime import date, datetime, timedelta
 from typing import TypedDict
 
@@ -189,27 +190,34 @@ DEFAULT_DELAY = 2.0
 # Module-level delay — overridden by --delay flag
 DELAY = DEFAULT_DELAY
 
-# Development.i milestone stage names → DB column names.
+# Development.i milestone stage names → DB column prefix.
 # Includes both long-form names (Brisbane portal) and short-form names
 # (Development.i portals: Ipswich, Redland, Sunshine Coast, Toowoomba, Western Downs).
+#
+# Each entry maps to a column prefix. The extraction logic appends:
+#   ""          → completed date  (e.g. record_creation_date)
+#   "_status"   → milestone status (e.g. record_creation_status)
+#   "_start_date" → start date    (e.g. record_creation_start_date)
 STAGE_COLUMN_MAP = {
     # Long-form names (Brisbane portal)
-    "record creation date": "record_creation_date",
-    "commence confirmation period date": "commence_confirmation_date",
-    "properly made date": "properly_made_date",
-    "action notice response received date": "action_notice_response_date",
-    "confirmation notice sent date": "confirmation_notice_sent_date",
-    "information request sent date": "info_request_sent_date",
-    "final response received date": "final_response_received_date",
-    "public notification compliance notice date": "public_notification_date",
-    "decision notice date": "decision_notice_date",
+    "record creation date": "record_creation",
+    "commence confirmation period date": "commence_confirmation",
+    "properly made date": "properly_made",
+    "action notice response received date": "action_notice_response",
+    "confirmation notice sent date": "confirmation_notice_sent",
+    "information request sent date": "info_request_sent",
+    "final response received date": "final_response_received",
+    "public notification compliance notice date": "public_notification",
+    "decision notice date": "decision_notice",
     # Short-form names (Development.i portal stage table)
-    "confirmation period": "commence_confirmation_date",
-    "confirmation notice": "confirmation_notice_sent_date",
-    "action notice": "action_notice_response_date",
-    "information request": "info_request_sent_date",
-    "information response": "final_response_received_date",
-    "decision notice": "decision_notice_date",
+    "confirmation period": "commence_confirmation",
+    "confirmation notice": "confirmation_notice_sent",
+    "action notice": "action_notice_response",
+    "information request": "info_request_sent",
+    "information response": "final_response_received",
+    "decision notice": "decision_notice",
+    "referral": "referral",
+    "change representations": "change_representations",
 }
 
 
@@ -522,8 +530,8 @@ def extract_detail(page: Page) -> dict:
 
     # Assessment stages table.
     # Development.i portals use a 4-column table: Description, Status, Start Date, Date Completed.
-    # We read Date Completed (index 3) as it's the semantically correct date for all milestone
-    # columns. Brisbane portal uses a 3-column table — falls back to index 2.
+    # Brisbane portal uses a 3-column table (no Status column).
+    # We capture all available columns: status, start date, and completed date.
     stage_rows = page.locator("table.table-bordered tr")
     for i in range(stage_rows.count()):
         row = stage_rows.nth(i)
@@ -531,17 +539,27 @@ def extract_detail(page: Page) -> dict:
         if cells.count() < 3:
             continue
         stage_name = cells.nth(0).text_content().strip().lower()
-        col_name = STAGE_COLUMN_MAP.get(stage_name)
-        if not col_name:
+        col_prefix = STAGE_COLUMN_MAP.get(stage_name)
+        if not col_prefix:
             continue
         if cells.count() >= 4:
-            # 4-column table: prefer Date Completed; fall back to Start Date
-            date_text = cells.nth(3).text_content().strip() or cells.nth(2).text_content().strip()
+            # 4-column table: Status | Start Date | Date Completed
+            status_text = cells.nth(1).text_content().strip()
+            start_text = cells.nth(2).text_content().strip()
+            completed_text = cells.nth(3).text_content().strip()
         else:
-            date_text = cells.nth(2).text_content().strip()
-        d = _parse_rendered_date(date_text)
-        if d:
-            out[col_name] = d
+            # 3-column table (Brisbane): Start Date | Date Completed — no Status
+            status_text = None
+            start_text = None
+            completed_text = cells.nth(2).text_content().strip()
+        if status_text:
+            out[f"{col_prefix}_status"] = status_text
+        start_d = _parse_rendered_date(start_text)
+        if start_d:
+            out[f"{col_prefix}_start_date"] = start_d
+        completed_d = _parse_rendered_date(completed_text)
+        if completed_d:
+            out[f"{col_prefix}_date"] = completed_d
 
     # Associated properties
     properties = []
@@ -657,12 +675,24 @@ def upsert_detail(conn, cfg: CouncilConfig, application_number: str, detail: dic
         "assessment_level", "use_categories",
         "applicant", "consultant", "assessment_officer", "appeal_result",
         "lodgement_date", "public_notification_required",
-        # Milestones
+        # Milestone completed dates
         "record_creation_date", "commence_confirmation_date",
         "properly_made_date", "action_notice_response_date",
         "confirmation_notice_sent_date", "info_request_sent_date",
         "final_response_received_date", "public_notification_date",
-        "decision_notice_date",
+        "decision_notice_date", "referral_date", "change_representations_date",
+        # Milestone statuses
+        "record_creation_status", "commence_confirmation_status",
+        "properly_made_status", "action_notice_response_status",
+        "confirmation_notice_sent_status", "info_request_sent_status",
+        "final_response_received_status", "public_notification_status",
+        "decision_notice_status", "referral_status", "change_representations_status",
+        # Milestone start dates
+        "record_creation_start_date", "commence_confirmation_start_date",
+        "properly_made_start_date", "action_notice_response_start_date",
+        "confirmation_notice_sent_start_date", "info_request_sent_start_date",
+        "final_response_received_start_date", "public_notification_start_date",
+        "decision_notice_start_date", "referral_start_date", "change_representations_start_date",
         # Parsed categories
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to",
@@ -857,7 +887,7 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
     a prior browser session (e.g. Western Downs). The JSON API returns
     structured data directly.
     """
-    api_url = f"{cfg['base_url']}/Geo/GetApplicationById?applicationId={app_num}&appType=development"
+    api_url = f"{cfg['base_url']}/Geo/GetApplicationById?applicationId={quote(app_num, safe='/')}&appType=development"
     response = page.evaluate(f"""async () => {{
         try {{
             const resp = await fetch('{api_url}');
@@ -936,19 +966,82 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
     log.info(f"  Updated {len(detail)} fields (JSON API)")
 
 
+def _open_detail_via_filter(page: Page, cfg: CouncilConfig, app_num: str) -> bool:
+    """Open a DA detail page via FilterDirect + Expand.
+
+    Some Development.i portals (e.g. Ipswich) hang on direct URL navigation
+    to ApplicationDetailsView. Instead we:
+      1. GET /Home/FilterDirect?filters=DANumber={app_num}  — loads search results
+      2. Click .application-moreinfo[data-id="{app_num}"]    — opens detail modal
+      3. Remove target attr from .expand a then click         — navigates to full detail page
+
+    Returns True if the full detail page loaded with h5 fields visible.
+    """
+    filter_url = f"{cfg['base_url']}/Home/FilterDirect?filters=DANumber={quote(app_num, safe='/')}"
+    page.goto(filter_url, wait_until="domcontentloaded", timeout=30000)
+    time.sleep(DELAY)
+
+    # Click the detail modal link for this specific application
+    modal_link = page.locator(f'.application-moreinfo[data-id="{app_num}"]')
+    if modal_link.count() == 0:
+        log.warning(f"  {app_num} — no result found via FilterDirect")
+        return False
+    modal_link.first.click()
+    time.sleep(DELAY)
+
+    # Remove target="_blank" from expand link so it navigates in the same tab
+    expand_link = page.locator(".expand a")
+    if expand_link.count() == 0:
+        # Modal may have the data already — check for h5 fields
+        try:
+            page.wait_for_selector("h5", timeout=5000)
+            return True
+        except Exception:
+            log.warning(f"  {app_num} — no expand link and no h5 fields in modal")
+            return False
+
+    expand_link.evaluate("el => el.removeAttribute('target')")
+    expand_link.click()
+    time.sleep(DELAY)
+
+    # Wait for the full detail page to load
+    try:
+        page.wait_for_selector("h5", timeout=15000)
+    except Exception:
+        log.warning(f"  {app_num} — detail page did not load after expand")
+        return False
+
+    return True
+
+
 def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str | None) -> None:
     """Enrich a single application from its detail page or JSON API."""
     if not cfg["has_detail_pages"]:
         _enrich_via_json_api(page, conn, cfg, app_num, app_type)
         return
 
+    # Try direct URL navigation first; fall back to FilterDirect approach
     param = cfg["detail_param"]
-    url = f"{detail_url(cfg)}?{param}={app_num}&type=plan_development_apps"
-    page.goto(url, wait_until="networkidle", timeout=30000)
-    time.sleep(DELAY)
+    url = f"{detail_url(cfg)}?{param}={quote(app_num, safe='/')}&type=plan_development_apps"
+
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_selector("h5", timeout=10000)
+        time.sleep(DELAY)
+    except Exception:
+        # Direct navigation failed — abort pending navigation, try FilterDirect
+        log.info(f"  Direct navigation failed, trying FilterDirect...")
+        try:
+            page.goto("about:blank", wait_until="commit", timeout=5000)
+        except Exception:
+            pass
+        if not _open_detail_via_filter(page, cfg, app_num):
+            log.warning(f"  {app_num} — could not open detail page")
+            upsert_detail(conn, cfg, app_num, {})
+            return
 
     # Check if redirected to home page (invalid app)
-    if "/Home/MapSearch" in page.url or page.locator("h1:has-text('Development.i')").count() > 0:
+    if "/Home/MapSearch" in page.url:
         if page.locator(".search-container, #searchTerm").count() > 0:
             log.warning(f"  {app_num} redirected to home page — skipping")
             upsert_detail(conn, cfg, app_num, {})
@@ -988,10 +1081,6 @@ def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str
         prop_data = extract_property_lot(page, cfg, land_number)
         enriched_properties.append(prop_data)
 
-        if len(raw_properties) > 1:
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            time.sleep(DELAY)
-
     primary_cadastre, primary_suburb = upsert_da_properties(
         conn, cfg, app_num, enriched_properties
     )
@@ -1021,6 +1110,15 @@ def _enrich_chunk(worker_id: int, rows: list, cfg: CouncilConfig, args) -> None:
         )
         page = context.new_page()
         page.set_default_timeout(30000)
+
+        # Visit the home/search page first to establish a session cookie.
+        # Some Development.i portals reject direct detail-page requests
+        # without a prior session.
+        try:
+            page.goto(search_url(cfg), wait_until="domcontentloaded", timeout=30000)
+            time.sleep(DELAY)
+        except Exception as e:
+            log.warning(f"{prefix} Failed to load home page for session: {e}")
 
         try:
             log.info(f"{prefix} Session ready — {total} records to process")
