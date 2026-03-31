@@ -77,114 +77,18 @@ class CouncilConfig(TypedDict):
     use_filter_direct: bool     # True if detail pages require FilterDirect flow (e.g. Ipswich)
 
 
-# ── Council configurations ────────────────────────────────────────────────────
+# ── Group presets ─────────────────────────────────────────────────────────────
+# Councils vary in which application groups they expose.
+# Per-council wrapper scripts import these when building their config.
 
-# Group presets — councils vary in which application groups they expose
-_GROUPS_DA_ONLY = {
+GROUPS_DA_ONLY = {
     "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
 }
 
-_GROUPS_DA_BA_PLUMB = {
+GROUPS_DA_BA_PLUMB = {
     "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
     "building": {"label": "Building", "include_da": False, "include_ba": True, "include_plumb": False},
     "plumbing": {"label": "Plumbing", "include_da": False, "include_ba": False, "include_plumb": True},
-}
-
-COUNCILS: dict[str, CouncilConfig] = {
-    "ipswich": {
-        "name": "Ipswich",
-        "slug": "ipswich",
-        "base_url": "https://developmenti.ipswich.qld.gov.au",
-        "lga_pid": "lgafd22606d6b20",
-        "full_start_date": "2018-01-01",
-        "groups": _GROUPS_DA_ONLY,
-        "filter_panel_selector": "#search-filters",
-        "filter_panel_needs_show": True,
-        "date_input_selector": "#dateRangeInput",
-        "group_select_id": "filter-application-group",
-        # Detail page uses ?type=plan_development_apps&id=APP_NUMBER
-        "detail_param": "id",
-        "has_detail_pages": True,
-        "description_addr_at_end": False,
-        "ignore_https_errors": False,
-        "use_filter_direct": True,
-    },
-    "redland": {
-        "name": "Redland",
-        "slug": "redland",
-        "base_url": "https://developmenti.redland.qld.gov.au",
-        "lga_pid": "lga42379c2c72f3",
-        "full_start_date": "2020-01-01",
-        "groups": _GROUPS_DA_BA_PLUMB,
-        # Redland uses div#filter-container, which is not hidden by default
-        "filter_panel_selector": "#filter-container",
-        "filter_panel_needs_show": False,
-        "date_input_selector": "input[name='daterange']",
-        "group_select_id": "filter-application-group",
-        "detail_param": "applicationNumber",
-        "has_detail_pages": True,
-        "description_addr_at_end": False,
-        "ignore_https_errors": False,
-        "use_filter_direct": False,
-    },
-    "sunshinecoast": {
-        "name": "Sunshine Coast",
-        "slug": "sunshinecoast",
-        "base_url": "https://developmenti.sunshinecoast.qld.gov.au",
-        "lga_pid": "lgaa9ec4359b5d6",
-        "full_start_date": "2020-01-01",
-        "groups": _GROUPS_DA_BA_PLUMB,
-        "filter_panel_selector": "#search-filters",
-        "filter_panel_needs_show": True,
-        "date_input_selector": "#dateRangeInput",
-        "group_select_id": "filter-application-group",
-        # Sunshine Coast uses ?ApplicationId= (capital A)
-        "detail_param": "ApplicationId",
-        "has_detail_pages": True,
-        "description_addr_at_end": False,
-        "ignore_https_errors": False,
-        "use_filter_direct": False,
-    },
-    "toowoomba": {
-        "name": "Toowoomba",
-        "slug": "toowoomba",
-        "base_url": "https://developmenti.tr.qld.gov.au",
-        "lga_pid": "lga59db913dcc12",
-        "full_start_date": "1998-01-01",
-        "groups": _GROUPS_DA_ONLY,
-        "filter_panel_selector": "#search-filters",
-        "filter_panel_needs_show": True,
-        "date_input_selector": "#dateRangeInput",
-        "group_select_id": "filter-application-group",
-        "detail_param": "id",
-        "has_detail_pages": True,
-        # Toowoomba description format: "Proposal - ADDRESS SUBURB QLD POSTCODE"
-        # Address is at the END, not the start (opposite to Brisbane).
-        "description_addr_at_end": True,
-        "ignore_https_errors": False,
-        "use_filter_direct": False,
-    },
-    "westerndowns": {
-        "name": "Western Downs",
-        "slug": "westerndowns",
-        "base_url": "https://developmenti.wdrc.qld.gov.au",
-        "lga_pid": "lga1be86b7b4de2",
-        "full_start_date": "2017-01-01",
-        "groups": _GROUPS_DA_ONLY,
-        # Filter panel is visible by default on WDRC — no force-show needed
-        "filter_panel_selector": "#search-filters",
-        "filter_panel_needs_show": False,
-        "date_input_selector": "#dateRangeInput",
-        "group_select_id": "filter-application-group",
-        "detail_param": "id",
-        # WDRC uses AJAX modals only — no standalone ApplicationDetailsView.
-        # Enrichment falls back to the /Geo/GetApplicationById JSON API.
-        "has_detail_pages": False,
-        "description_addr_at_end": False,
-        # SSL certificate is expired — suppress cert validation errors.
-        "ignore_https_errors": True,
-        "use_filter_direct": False,
-    },
 }
 
 

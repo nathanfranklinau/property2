@@ -9,7 +9,6 @@ import pytest
 from datetime import date
 
 from import_developmenti_da import (
-    COUNCILS,
     STAGE_COLUMN_MAP,
     CouncilConfig,
     _extract_description_address,
@@ -22,6 +21,23 @@ from import_developmenti_da import (
     build_parser,
     _RE_DESC_ADDR_END,
 )
+from import_ipswich_da import CONFIG as IPSWICH_CONFIG
+from import_redland_da import CONFIG as REDLAND_CONFIG
+from import_sunshinecoast_da import CONFIG as SUNSHINECOAST_CONFIG
+from import_toowoomba_da import CONFIG as TOOWOOMBA_CONFIG
+from import_westerndowns_da import CONFIG as WESTERNDOWNS_CONFIG
+
+# Build COUNCILS dict from per-council configs for test parametrisation
+COUNCILS: dict[str, CouncilConfig] = {
+    cfg["slug"]: cfg
+    for cfg in (
+        IPSWICH_CONFIG,
+        REDLAND_CONFIG,
+        SUNSHINECOAST_CONFIG,
+        TOOWOOMBA_CONFIG,
+        WESTERNDOWNS_CONFIG,
+    )
+}
 
 
 # ── Council configuration validation ─────────────────────────────────────────
@@ -38,11 +54,11 @@ class TestCouncilConfigs:
     def test_config_has_required_keys(self, slug: str):
         cfg = COUNCILS[slug]
         required_keys = [
-            "name", "slug", "base_url", "parent_table", "child_table",
+            "name", "slug", "base_url", "lga_pid",
             "full_start_date", "groups", "filter_panel_selector",
             "filter_panel_needs_show", "date_input_selector", "group_select_id",
             "detail_param", "has_detail_pages", "description_addr_at_end",
-            "ignore_https_errors",
+            "ignore_https_errors", "use_filter_direct",
         ]
         for key in required_keys:
             assert key in cfg, f"Missing key '{key}' in {slug} config"
@@ -144,23 +160,6 @@ class TestCouncilConfigs:
             assert COUNCILS[slug]["description_addr_at_end"] is False, (
                 f"{slug} should have addr at start"
             )
-
-    @pytest.mark.parametrize("slug", EXPECTED_COUNCILS)
-    def test_parent_table_matches_convention(self, slug: str):
-        table = COUNCILS[slug]["parent_table"]
-        assert table.endswith("_dev_applications")
-
-    @pytest.mark.parametrize("slug", EXPECTED_COUNCILS)
-    def test_child_table_matches_convention(self, slug: str):
-        table = COUNCILS[slug]["child_table"]
-        assert table.endswith("_da_properties")
-
-    @pytest.mark.parametrize("slug", EXPECTED_COUNCILS)
-    def test_tables_share_council_prefix(self, slug: str):
-        cfg = COUNCILS[slug]
-        parent_prefix = cfg["parent_table"].replace("_dev_applications", "")
-        child_prefix = cfg["child_table"].replace("_da_properties", "")
-        assert parent_prefix == child_prefix
 
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
@@ -387,8 +386,8 @@ class TestStageColumnMap:
         assert "confirmation notice" in STAGE_COLUMN_MAP
 
     def test_stage_count(self):
-        # 9 long-form (Brisbane) + 6 short-form (Development.i portals)
-        assert len(STAGE_COLUMN_MAP) == 15
+        # 9 long-form (Brisbane) + 8 short-form (Development.i portals)
+        assert len(STAGE_COLUMN_MAP) == 17
 
 
 # ── CLI parser ───────────────────────────────────────────────────────────────
@@ -524,13 +523,9 @@ class TestCrossCouncilConsistency:
         urls = [cfg["base_url"] for cfg in COUNCILS.values()]
         assert len(urls) == len(set(urls)), "Duplicate base URLs found"
 
-    def test_no_duplicate_parent_tables(self):
-        tables = [cfg["parent_table"] for cfg in COUNCILS.values()]
-        assert len(tables) == len(set(tables)), "Duplicate parent tables found"
-
-    def test_no_duplicate_child_tables(self):
-        tables = [cfg["child_table"] for cfg in COUNCILS.values()]
-        assert len(tables) == len(set(tables)), "Duplicate child tables found"
+    def test_no_duplicate_lga_pids(self):
+        pids = [cfg["lga_pid"] for cfg in COUNCILS.values()]
+        assert len(pids) == len(set(pids)), "Duplicate lga_pids found"
 
     def test_all_filter_panel_selectors_are_css(self):
         for slug, cfg in COUNCILS.items():

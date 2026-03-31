@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Import Toowoomba Regional Council development applications from Development.i.
 
-Thin wrapper around the generic Development.i importer.
+Wrapper around the generic Development.i importer with Toowoomba-specific config.
 See import_developmenti_da.py for full documentation and usage.
 
 Usage:
@@ -13,7 +13,27 @@ Usage:
     python import_toowoomba_da.py --app APP_NUMBER   # enrich one app
 """
 
-from import_developmenti_da import COUNCILS, run
+from import_developmenti_da import GROUPS_DA_ONLY, CouncilConfig, run
+
+CONFIG: CouncilConfig = {
+    "name": "Toowoomba",
+    "slug": "toowoomba",
+    "base_url": "https://developmenti.tr.qld.gov.au",
+    "lga_pid": "lga59db913dcc12",
+    "full_start_date": "1998-01-01",
+    "groups": GROUPS_DA_ONLY,
+    "filter_panel_selector": "#search-filters",
+    "filter_panel_needs_show": True,
+    "date_input_selector": "#dateRangeInput",
+    "group_select_id": "filter-application-group",
+    "detail_param": "id",
+    "has_detail_pages": True,
+    # Toowoomba description format: "Proposal - ADDRESS SUBURB QLD POSTCODE"
+    # Address is at the END, not the start (opposite to Brisbane).
+    "description_addr_at_end": True,
+    "ignore_https_errors": False,
+    "use_filter_direct": False,
+}
 
 if __name__ == "__main__":
-    run(COUNCILS["toowoomba"])
+    run(CONFIG)
