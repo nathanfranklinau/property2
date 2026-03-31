@@ -762,13 +762,17 @@ def perm_lot_with_street(
             street_parts.append(_tc(rec["street_suffix"]))
         street_str = " ".join(street_parts)
         addr = _assemble([lot, street_str, _locality_block(rec)])
-        # street_number is suppressed from the address — blank it so the aligner
-        # labels "989" as lot_number only, not both lot_number and street_number.
-        fields = {**_canonical_fields(rec), "street_number": ""}
+        # Include "Lot " prefix in lot_number so the aligner labels both tokens as
+        # LOT_NUMBER (B- + I-) rather than leaving "Lot" unlabelled (O), which caused
+        # the model to misclassify the keyword as BUILDING_NAME.
+        # street_number is blanked so "210" isn't double-labelled.
+        fields = {**_canonical_fields(rec), "street_number": "", "lot_number": lot}
         return [(addr, "lot_with_street", fields)]
     else:
         addr = _assemble([lot, _street_block(rec), _locality_block(rec)])
-    return [(addr, "lot_with_street", _canonical_fields(rec))]
+        # Include "Lot " prefix so the aligner labels it as part of LOT_NUMBER.
+        fields = {**_canonical_fields(rec), "lot_number": lot}
+    return [(addr, "lot_with_street", fields)]
 
 
 def perm_lot_abbrev(

@@ -155,4 +155,23 @@ class AddressParser:
                     # I- without preceding B- (rare model error) — treat as B-.
                     field_words[field_name] = [word_text]
 
-        return {field: " ".join(tokens) for field, tokens in field_words.items()}
+        result = {field: " ".join(tokens) for field, tokens in field_words.items()}
+
+        # Strip leading "Lot " keyword from lot_number.
+        # After retraining with the fixed training data "Lot" will be labelled as
+        # part of LOT_NUMBER (B- + I-), so the raw value becomes e.g. "Lot 210".
+        # Also handles the current (pre-fix) model which occasionally labels "Lot"
+        # as BUILDING_NAME — move it to lot_number when lot_number is already present.
+        if "lot_number" in result:
+            val = result["lot_number"]
+            if val.lower().startswith("lot "):
+                result["lot_number"] = val[4:].strip()
+        elif result.get("building_name", "").lower() == "lot" and "lot_number" in result:
+            pass  # handled above
+        elif result.get("building_name", "").lower() == "lot":
+            # Old model bug: "Lot" classified as building_name when a lot_number was
+            # parsed separately — the number is already in lot_number (handled above).
+            # If there is NO lot_number at all, the whole token is just noise; drop it.
+            del result["building_name"]
+
+        return result

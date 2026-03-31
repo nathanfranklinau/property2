@@ -570,10 +570,26 @@ def test_number_range_returns_empty_when_no_last(lookups):
 def test_lot_with_street(lookups):
     rec = _simple_rec(lot_number="2556")
     results = perm_lot_with_street(rec, lookups)
-    addr, ptype, _ = results[0]
+    addr, ptype, fields = results[0]
     assert ptype == "lot_with_street"
     assert "Lot 2556" in addr
     assert "16 Banjo Street" in addr
+    # "Lot" prefix must be included so the aligner labels both tokens as LOT_NUMBER.
+    assert fields["lot_number"] == "Lot 2556"
+    assert fields["street_number"] == "16"
+
+
+def test_lot_only_with_street(lookups):
+    """Lot-only address: lot_number == street_number fallback — 'Lot 16 Banjo Street'."""
+    rec = _simple_rec(lot_number="16")  # street_number is also "16"
+    results = perm_lot_with_street(rec, lookups)
+    addr, ptype, fields = results[0]
+    assert ptype == "lot_with_street"
+    assert addr.startswith("Lot 16"), addr
+    assert "Banjo Street" in addr
+    # "Lot " prefix included in lot_number; street_number blanked to avoid double-labelling.
+    assert fields["lot_number"] == "Lot 16"
+    assert fields["street_number"] == ""
 
 
 def test_lot_abbrev_returns_empty(lookups):
