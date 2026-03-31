@@ -11,7 +11,7 @@ Usage (run from data-layer/):
     python -m training.train --dataset training/data/iob_dataset \
                              --output  training/model
 
-Typical runtime on RTX 3060 (12 GB): ~3–5 hours for 2–3 M examples, 3 epochs.
+Typical runtime on RTX 3060 (12 GB): ~1–2 hours for 600k IOB examples, 1 epoch with early stopping.
 """
 
 import argparse
@@ -25,6 +25,7 @@ from transformers import (
     AutoModelForTokenClassification,
     AutoTokenizer,
     DataCollatorForTokenClassification,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
 )
@@ -86,7 +87,7 @@ def main() -> None:
         default=DEFAULT_OUTPUT,
         help="Directory to save the trained model and tokenizer",
     )
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -143,6 +144,7 @@ def main() -> None:
     #   batch_size=64 × gradient_accumulation_steps=1 → effective batch 64
     #   fp16=True saves ~40% VRAM and speeds up training on Ampere GPUs
     #   num_workers=8 to keep GPU fed (high utilization at ~170W TDP)
+    #   early_stopping stops if eval loss doesn't improve for 2 evals (saves ~50% training time)
 
     output_dir = str(args.output)
     training_args = TrainingArguments(
@@ -176,6 +178,12 @@ def main() -> None:
         tokenizer=tokenizer,
         data_collator=data_collator,
         compute_metrics=_make_compute_metrics(label_names),
+        callbacks=[
+            EarlyStoppingCallback(
+                early_stopping_patience=2,
+                early_stopping_threshold=0.0,
+            )
+        ],
     )
 
     # ── Train ─────────────────────────────────────────────────────────────────
