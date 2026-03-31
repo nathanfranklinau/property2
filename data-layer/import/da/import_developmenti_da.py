@@ -74,6 +74,7 @@ class CouncilConfig(TypedDict):
     has_detail_pages: bool      # False if portal uses AJAX modals only (no standalone detail pages)
     description_addr_at_end: bool   # True if address appears at END of description (Toowoomba format)
     ignore_https_errors: bool   # True for portals with expired SSL certs (e.g. Western Downs)
+    use_filter_direct: bool     # True if detail pages require FilterDirect flow (e.g. Ipswich)
 
 
 # ── Council configurations ────────────────────────────────────────────────────
@@ -106,6 +107,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "use_filter_direct": True,
     },
     "redland": {
         "name": "Redland",
@@ -123,6 +125,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "use_filter_direct": False,
     },
     "sunshinecoast": {
         "name": "Sunshine Coast",
@@ -140,6 +143,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "has_detail_pages": True,
         "description_addr_at_end": False,
         "ignore_https_errors": False,
+        "use_filter_direct": False,
     },
     "toowoomba": {
         "name": "Toowoomba",
@@ -158,6 +162,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         # Address is at the END, not the start (opposite to Brisbane).
         "description_addr_at_end": True,
         "ignore_https_errors": False,
+        "use_filter_direct": False,
     },
     "westerndowns": {
         "name": "Western Downs",
@@ -178,6 +183,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "description_addr_at_end": False,
         # SSL certificate is expired — suppress cert validation errors.
         "ignore_https_errors": True,
+        "use_filter_direct": False,
     },
 }
 
@@ -1020,32 +1026,29 @@ def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str
         _enrich_via_json_api(page, conn, cfg, app_num, app_type)
         return
 
-    # Try direct URL navigation first; fall back to FilterDirect approach
-    param = cfg["detail_param"]
-    url = f"{detail_url(cfg)}?{param}={quote(app_num, safe='/')}&type=plan_development_apps"
-
-    try:
-        page.goto(url, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_selector("h5", timeout=10000)
-        time.sleep(DELAY)
-    except Exception:
-        # Direct navigation failed — abort pending navigation, try FilterDirect
-        log.info(f"  Direct navigation failed, trying FilterDirect...")
+    if cfg["use_filter_direct"]:
+        # FilterDirect flow (Ipswich etc.) — no direct URL navigation
+        if not _open_detail_via_filter(page, cfg, app_num):
+            log.warning(f"  {app_num} — could not open detail page via FilterDirect")
+            upsert_detail(conn, cfg, app_num, {})
+            return
+    else:
+        # Direct URL navigation
+        param = cfg["detail_param"]
+        url = f"{detail_url(cfg)}?{param}={quote(app_num, safe='/')}&type=plan_development_apps"
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
         try:
-            page.goto("about:blank", wait_until="commit", timeout=5000)
+            page.wait_for_selector("h5", timeout=15000)
         except Exception:
             pass
-        if not _open_detail_via_filter(page, cfg, app_num):
-            log.warning(f"  {app_num} — could not open detail page")
-            upsert_detail(conn, cfg, app_num, {})
-            return
+        time.sleep(DELAY)
 
-    # Check if redirected to home page (invalid app)
-    if "/Home/MapSearch" in page.url:
-        if page.locator(".search-container, #searchTerm").count() > 0:
-            log.warning(f"  {app_num} redirected to home page — skipping")
-            upsert_detail(conn, cfg, app_num, {})
-            return
+        # Check if redirected to home page (invalid app)
+        if "/Home/MapSearch" in page.url:
+            if page.locator(".search-container, #searchTerm").count() > 0:
+                log.warning(f"  {app_num} redirected to home page — skipping")
+                upsert_detail(conn, cfg, app_num, {})
+                return
 
     detail = extract_detail(page)
 
