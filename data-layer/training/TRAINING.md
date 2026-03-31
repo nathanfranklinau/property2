@@ -2,7 +2,7 @@
 
 Fine-tunes `distilbert-base-uncased` on Australian address examples to produce the model used by `POST /parse-address`.
 
-**Estimated time on RTX 3060 (12 GB):** ~1 hour generate + ~1 hour prepare + ~6–10 hours train.
+**Estimated time on RTX 3060 (12 GB):** ~1 hour generate + ~1 hour prepare + ~1–2 hours train (with early stopping).
 
 ---
 
@@ -94,7 +94,7 @@ Output: `training/model/` (~260 MB)
 
 Training saves checkpoints every 2,000 steps. If interrupted, re-running resumes from the last checkpoint automatically.
 
-**Expected validation F1 after 3 epochs: > 0.97**
+**Expected validation F1 with early stopping:** ~0.9999 by epoch 1.2–1.3 (training halts automatically)
 
 ---
 
@@ -171,3 +171,28 @@ venv/bin/python training/generate_address_data.py \
 venv/bin/python -m training.prepare_iob
 venv/bin/python -m training.train
 ```
+
+---
+
+## Testing dataset size hypothesis (next iteration)
+
+Prior training showed **eval F1 plateaued at 0.9999 by epoch 1.17 with zero improvement through 1.37**, suggesting the 831k row dataset (50k --limit) may be oversized. To test if smaller datasets achieve the same F1:
+
+1. **Generate smaller dataset:**
+   ```bash
+   venv/bin/python training/generate_address_data.py \
+     --output training/data/address_training_small.parquet \
+     --states QLD \
+     --limit 20000
+   ```
+   This produces ~150–200k IOB examples instead of 600k.
+
+2. **Run prepare + train with the smaller dataset:**
+   ```bash
+   venv/bin/python -m training.prepare_iob --dataset training/data/address_training_small.parquet
+   venv/bin/python -m training.train
+   ```
+
+3. **Compare eval F1:** If validation F1 stays ≥0.9999, smaller dataset is sufficient (saves storage + training time for future retrains).
+
+4. **Check test set performance:** If available, compare test set F1 vs validation F1. If test F1 is significantly lower, may need more diverse training data.
