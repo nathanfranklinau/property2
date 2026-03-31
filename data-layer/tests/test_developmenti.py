@@ -377,12 +377,18 @@ class TestStageColumnMap:
             assert col_name == col_name.lower(), f"Column should be lowercase: {col_name}"
 
     def test_known_stages_present(self):
+        # Long-form names (Brisbane portal)
         assert "decision notice date" in STAGE_COLUMN_MAP
         assert "properly made date" in STAGE_COLUMN_MAP
         assert "record creation date" in STAGE_COLUMN_MAP
+        # Short-form names (Development.i portals)
+        assert "decision notice" in STAGE_COLUMN_MAP
+        assert "confirmation period" in STAGE_COLUMN_MAP
+        assert "confirmation notice" in STAGE_COLUMN_MAP
 
     def test_stage_count(self):
-        assert len(STAGE_COLUMN_MAP) == 9
+        # 9 long-form (Brisbane) + 6 short-form (Development.i portals)
+        assert len(STAGE_COLUMN_MAP) == 15
 
 
 # ── CLI parser ───────────────────────────────────────────────────────────────

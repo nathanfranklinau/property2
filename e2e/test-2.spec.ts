@@ -1,40 +1,35 @@
 import { test, expect } from '@playwright/test';
 
 test('test', async ({ page }) => {
-  // Recording...
-  await page.goto('https://developmenti.ipswich.qld.gov.au/Home/MapSearch');
-  await page.waitForTimeout(1000);
-  await page.locator('h2.mobile-filters').click();
-  await page.waitForTimeout(1000);
-  await page.locator('#filter-status-type').selectOption('all');
-  await page.waitForTimeout(1000);
-
-  await page.locator('#show-daterange').click();
-  await page.waitForTimeout(1000);
-
-  await page.locator('#date-range-dropdown input[name="status"][value="submitted"]').check();
-  await page.waitForTimeout(1000);
-
-  await page.locator('#dateRangeInput').click();
-  await page.waitForTimeout(1000);
-
-  await page.locator('input[name="daterangepicker_start"]').click();
-  await page.locator('input[name="daterangepicker_start"]').fill('01/01/2020');
-  await page.waitForTimeout(1000);
-
-  await page.locator('input[name="daterangepicker_end"]').click();
-  await page.locator('input[name="daterangepicker_end"]').fill('01/06/2020');
-  await page.waitForTimeout(1000);
-
-  await page.locator('.daterangepicker button.applyBtn').click();
-  await page.waitForTimeout(1000);
-
-  await page.locator('h2.mobile-filters').click();
-  await page.waitForTimeout(1000);
-
-  const downloadPromise = page.waitForEvent('download');
-  await page.locator('.download-csv .fa.fa-download').click();
-  const download = await downloadPromise;
-  await page.waitForTimeout(2000);
-
+  await page.goto('https://developmenti.ipswich.qld.gov.au/Home/ApplicationDetailsView?appNo=9%2F2022%2FSSPRV%2FS&type=plan_development_apps');
+  await page.getByRole('heading', { name: 'Full Description:' }).click();
+  await page.getByRole('heading', { name: 'Progress:' }).click();
+  await page.getByRole('heading', { name: 'Stage/Decision:' }).click();
+  await page.getByRole('heading', { name: 'Application Type:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Level:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Officer:' }).click();
+  await page.getByRole('heading', { name: 'Date Submitted:' }).click();
+  await page.getByRole('heading', { name: 'Public Notification Required:' }).click();
+  await page.getByRole('heading', { name: 'Associated Properties   ' }).click();
+  await page.goto('https://developmenti.ipswich.qld.gov.au/Home/ApplicationDetailsView?appNo=5125%2F2021%2FMAMC%2FA&type=plan_development_apps');
+  await page.getByRole('heading', { name: 'Full Description:' }).click();
+  await page.getByRole('heading', { name: 'Progress:' }).click();
+  await page.locator('div').filter({ hasText: /^Stage\/Decision:$/ }).click();
+  await page.getByRole('heading', { name: 'Application Type:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Level:' }).click();
+  await page.getByRole('heading', { name: 'Use:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Officer:' }).click();
+  await page.getByRole('heading', { name: 'Date Submitted:' }).click();
+  await page.getByRole('heading', { name: 'Public Notification Required:' }).click();
+  await page.goto('https://developmenti.ipswich.qld.gov.au/Home/ApplicationDetailsView?appNo=4642%2F2021%2FOW&type=plan_development_apps');
+  await page.locator('div').filter({ hasText: /^Full Description:$/ }).click();
+  await page.getByRole('heading', { name: 'Progress:' }).click();
+  await page.getByRole('heading', { name: 'Stage/Decision:' }).click();
+  await page.getByRole('heading', { name: 'Application Type:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Level:' }).click();
+  await page.getByRole('heading', { name: 'Use:' }).click();
+  await page.getByRole('heading', { name: 'Assessment Officer:' }).click();
+  await page.getByRole('heading', { name: 'Date Submitted:' }).click();
+  await page.getByRole('heading', { name: 'Date Decided:' }).click();
+  await page.getByRole('heading', { name: 'Public Notification Required:' }).click();
 });
