@@ -396,8 +396,8 @@ class TestStageColumnMap:
         assert "confirmation notice" in STAGE_COLUMN_MAP
 
     def test_stage_count(self):
-        # 9 long-form (Brisbane) + 8 short-form (Development.i portals)
-        assert len(STAGE_COLUMN_MAP) == 17
+        # 9 long-form (Brisbane) + 13 short-form (Development.i portals)
+        assert len(STAGE_COLUMN_MAP) == 22
 
 
 # ── CLI parser ───────────────────────────────────────────────────────────────

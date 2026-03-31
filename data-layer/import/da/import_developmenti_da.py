@@ -132,6 +132,12 @@ STAGE_COLUMN_MAP = {
     "decision notice": "decision_notice",
     "referral": "referral",
     "change representations": "change_representations",
+    # PDAEE / pre-construction application stages (e.g. Ipswich)
+    "submission review & lodgement": "submission_review",
+    "outstanding matters request": "outstanding_matters_request",
+    "outstanding matters response": "outstanding_matters_response",
+    "pre-construction certification acknowledgement": "precon_certification",
+    "maintenance stage": "maintenance",
 }
 
 # CSV column name variants per DB field. Each council's CSV may use different
@@ -293,7 +299,18 @@ def set_filters(
         """)
         time.sleep(0.5)
 
-    # 1. Set application group
+    # 1. Set status filter to "all" so we get decided/completed DAs too.
+    # Default is "current" on most portals, which excludes historical records.
+    page.evaluate("""() => {
+        const sel = document.getElementById('filter-status-type');
+        if (sel) {
+            sel.value = 'all';
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+    }""")
+    time.sleep(0.5)
+
+    # 2. Set application group
     group_id = cfg["group_select_id"]
     group_value = group.lower()
     page.evaluate(f"""() => {{
@@ -305,21 +322,21 @@ def set_filters(
     }}""")
     time.sleep(2.0)
 
-    # 2. Open date range dropdown if it exists
+    # 3. Open date range dropdown if it exists
     page.evaluate("""() => {
         const dropdown = document.getElementById('date-range-dropdown');
         if (dropdown) dropdown.style.display = 'block';
     }""")
     time.sleep(0.3)
 
-    # 3. Select "Submitted" radio if present
+    # 4. Select "Submitted" radio if present
     page.evaluate("""() => {
         const r = document.getElementById('status-submitted');
         if (r) { r.checked = true; r.dispatchEvent(new Event('change', {bubbles: true})); }
     }""")
     time.sleep(0.3)
 
-    # 4. Set date range via daterangepicker jQuery plugin
+    # 5. Set date range via daterangepicker jQuery plugin
     from_str = from_date.strftime("%d/%m/%Y")
     to_str = to_date.strftime("%d/%m/%Y")
     date_sel = cfg["date_input_selector"]
@@ -650,18 +667,27 @@ def upsert_detail(conn, cfg: CouncilConfig, application_number: str, detail: dic
         "confirmation_notice_sent_date", "info_request_sent_date",
         "final_response_received_date", "public_notification_date",
         "decision_notice_date", "referral_date", "change_representations_date",
+        "submission_review_date", "outstanding_matters_request_date",
+        "outstanding_matters_response_date", "precon_certification_date",
+        "maintenance_date",
         # Milestone statuses
         "record_creation_status", "commence_confirmation_status",
         "properly_made_status", "action_notice_response_status",
         "confirmation_notice_sent_status", "info_request_sent_status",
         "final_response_received_status", "public_notification_status",
         "decision_notice_status", "referral_status", "change_representations_status",
+        "submission_review_status", "outstanding_matters_request_status",
+        "outstanding_matters_response_status", "precon_certification_status",
+        "maintenance_status",
         # Milestone start dates
         "record_creation_start_date", "commence_confirmation_start_date",
         "properly_made_start_date", "action_notice_response_start_date",
         "confirmation_notice_sent_start_date", "info_request_sent_start_date",
         "final_response_received_start_date", "public_notification_start_date",
         "decision_notice_start_date", "referral_start_date", "change_representations_start_date",
+        "submission_review_start_date", "outstanding_matters_request_start_date",
+        "outstanding_matters_response_start_date", "precon_certification_start_date",
+        "maintenance_start_date",
         # Parsed categories
         "development_category", "dwelling_type", "unit_count",
         "lot_split_from", "lot_split_to",
