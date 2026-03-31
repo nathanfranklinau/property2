@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Check MapSearch for pagination, filters, or other ways to find all apps."""
 
+import os
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from playwright.sync_api import sync_playwright
 from da_common import USER_AGENT
 

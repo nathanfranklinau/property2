@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Inspect the actual property link structure in the modal."""
 
+import os
 import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from playwright.sync_api import sync_playwright
 from da_common import USER_AGENT
 
