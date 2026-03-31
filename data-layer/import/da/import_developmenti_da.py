@@ -75,6 +75,10 @@ class CouncilConfig(TypedDict):
     description_addr_at_end: bool   # True if address appears at END of description (Toowoomba format)
     ignore_https_errors: bool   # True for portals with expired SSL certs (e.g. Western Downs)
     use_filter_direct: bool     # True if detail pages require FilterDirect flow (e.g. Ipswich)
+    # Field mapping configs — DB column → list of portal label/CSV header variants (tried in order)
+    csv_field_map: dict[str, list[str]]
+    detail_text_fields: dict[str, list[str]]
+    detail_date_fields: dict[str, list[str]]
 
 
 # ── Group presets ─────────────────────────────────────────────────────────────
@@ -129,6 +133,70 @@ STAGE_COLUMN_MAP = {
     "referral": "referral",
     "change representations": "change_representations",
 }
+
+# CSV column name variants per DB field. Each council's CSV may use different
+# header names — this maps our internal DB column to the variants tried in order.
+DEFAULT_CSV_FIELD_MAP: dict[str, list[str]] = {
+    "application_number": ["application number", "app no.", "application", "number"],
+    "lodgement_date": ["date submitted", "lodgement date", "date lodged", "date", "date received"],
+    "description": ["description", "full description", "application description", "proposal"],
+    "status": ["status", "progress"],
+    "location_address": ["address", "property address", "location", "primary address"],
+    "application_type": ["application type", "type"],
+    "suburb": ["suburb", "locality"],
+    "decision": ["stage/decision", "decision"],
+    "assessment_level": ["assessment level"],
+    "application_group": ["application group"],
+}
+
+# Detail page h5 label variants per DB field (text fields).
+# The extraction logic finds h5:has-text(label) → parent → following-sibling div.
+DEFAULT_DETAIL_TEXT_FIELDS: dict[str, list[str]] = {
+    "status": ["Progress:", "Progress Status:"],
+    "decision": ["Stage/Decision:", "Decision:"],
+    "application_type": ["Application Type:"],
+    "assessment_level": ["Assessment Level:"],
+    "use_categories": ["Use:"],
+    "assessment_officer": ["Assessment Officer:"],
+    "appeal_result": ["Appeal result:", "Appeal Result:"],
+    "public_notification_required": ["Public Notification Required:"],
+    "description": ["Full Description:", "Description:"],
+}
+
+# Detail page h5 label variants per DB field (date fields — parsed as DD/MM/YYYY).
+DEFAULT_DETAIL_DATE_FIELDS: dict[str, list[str]] = {
+    "lodgement_date": ["Date Submitted:", "Date Received:"],
+    "decision_notice_date": ["Date Decided:"],
+}
+
+# JSON API field mappings (Western Downs — portals without detail pages).
+# JSON response key → DB column.
+JSON_API_FIELD_MAP: dict[str, str] = {
+    "progress": "status",
+    "stage": "decision",
+    "applicationType": "application_type",
+    "assessmentLevel": "assessment_level",
+    "description": "description",
+    "useLevel1": "use_categories",
+}
+
+JSON_API_DATE_FIELDS: dict[str, str] = {
+    "dateReceived": "lodgement_date",
+    "dateDecided": "decision_notice_date",
+}
+
+JSON_API_PROPERTY_FIELDS: dict[str, str] = {
+    "landNumber": "land_number",
+    "lotPlan": "lot_on_plan",
+    "address": "location_address",
+}
+
+# Property page constants — shared across all Development.i portals.
+PROPERTY_LINK_SELECTOR = "a[href*='PropertyDetailsView?landNumber=']"
+PROPERTY_LAND_NUMBER_RE = re.compile(r"landNumber=(\d+)")
+PROPERTY_LOT_LABEL = "Lot on Plan"
+PROPERTY_ADDRESS_LABEL = "Address"
+PROPERTY_VALUE_SELECTOR = ".col-sm-8 span"
 
 
 # ── URL helpers ──────────────────────────────────────────────────────────────
@@ -318,28 +386,29 @@ def parse_csv(content: str) -> list[dict]:
     return records
 
 
-def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
+def _csv_get(row: dict, field_map: dict[str, list[str]], field: str) -> str | None:
+    """Return the first non-empty value from CSV row for a mapped field."""
+    for csv_name in field_map.get(field, []):
+        val = row.get(csv_name)
+        if val:
+            return val
+    return None
+
+
+def map_csv_record(row: dict, group: str, cfg: CouncilConfig) -> dict | None:
     """Map a CSV row to our DB column names.
 
     Development.i CSV columns vary slightly between councils but the
-    core fields are consistent. We try multiple column name variants.
+    core fields are consistent. Column name variants are defined in
+    cfg["csv_field_map"].
     """
-    app_num = (
-        row.get("application number")
-        or row.get("app no.")
-        or row.get("application")
-        or row.get("number")
-    )
+    fm = cfg["csv_field_map"]
+
+    app_num = _csv_get(row, fm, "application_number")
     if not app_num:
         return None
 
-    date_str = (
-        row.get("date submitted")
-        or row.get("lodgement date")
-        or row.get("date lodged")
-        or row.get("date")
-        or row.get("date received")
-    )
+    date_str = _csv_get(row, fm, "lodgement_date")
     lodgement_date = None
     if date_str:
         for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
@@ -349,25 +418,13 @@ def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
             except ValueError:
                 continue
 
-    description = (
-        row.get("description")
-        or row.get("full description")
-        or row.get("application description")
-        or row.get("proposal")
-    )
-    status = row.get("status") or row.get("progress")
-    address = (
-        row.get("address")
-        or row.get("property address")
-        or row.get("location")
-        or row.get("primary address")
-    )
-    app_type = row.get("application type") or row.get("type")
-    suburb = row.get("suburb") or row.get("locality")
-
-    # Some portals include these in CSV; extract if available
-    decision = row.get("stage/decision") or row.get("decision")
-    assessment_level = row.get("assessment level")
+    description = _csv_get(row, fm, "description")
+    status = _csv_get(row, fm, "status")
+    address = _csv_get(row, fm, "location_address")
+    app_type = _csv_get(row, fm, "application_type")
+    suburb = _csv_get(row, fm, "suburb")
+    decision = _csv_get(row, fm, "decision")
+    assessment_level = _csv_get(row, fm, "assessment_level")
 
     # If no separate address column, try extracting from description.
     # Pass addr_at_end=False here — CSV scrape has no config context.
@@ -377,7 +434,8 @@ def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
         address = _extract_description_address(description, addr_at_end=False)
 
     # Prefer application_group from CSV if present (Ipswich includes it)
-    csv_group = row.get("application group")
+    csv_group = _csv_get(row, fm, "application_group")
+    groups_cfg = cfg["groups"]
     group_label = csv_group if csv_group else groups_cfg[group]["label"]
 
     return {
@@ -397,7 +455,7 @@ def map_csv_record(row: dict, group: str, groups_cfg: dict) -> dict | None:
 
 # ── Detail page extraction ───────────────────────────────────────────────────
 
-def extract_detail(page: Page) -> dict:
+def extract_detail(page: Page, cfg: CouncilConfig) -> dict:
     """Extract all data from a Development.i detail page."""
     out = {}
 
@@ -416,27 +474,28 @@ def extract_detail(page: Page) -> dict:
         text = get_field(label)
         return _parse_rendered_date(text)
 
-    out["status"] = get_field("Progress:") or get_field("Progress Status:")
-    out["decision"] = get_field("Stage/Decision:") or get_field("Decision:")
-    out["application_type"] = get_field("Application Type:")
-    out["assessment_level"] = get_field("Assessment Level:")
-    out["use_categories"] = get_field("Use:")
-    out["assessment_officer"] = get_field("Assessment Officer:")
-    out["appeal_result"] = get_field("Appeal result:") or get_field("Appeal Result:")
-    out["lodgement_date"] = get_date_field("Date Submitted:") or get_date_field("Date Received:")
-    out["public_notification_required"] = get_field("Public Notification Required:")
+    # Extract text fields from detail page h5 labels
+    for db_col, labels in cfg["detail_text_fields"].items():
+        for label in labels:
+            val = get_field(label)
+            if val:
+                out[db_col] = val
+                break
 
-    desc = get_field("Full Description:") or get_field("Description:")
+    # Extract date fields from detail page h5 labels
+    for db_col, labels in cfg["detail_date_fields"].items():
+        for label in labels:
+            val = get_date_field(label)
+            if val:
+                out[db_col] = val
+                break
+
+    # If description was found, extract address from it
+    desc = out.get("description")
     if desc:
-        out["description"] = desc
         address_part = _extract_description_address(desc)
         if address_part:
             out["location_address"] = address_part
-
-    # "Date Decided:" is an explicit field on the detail page — maps to decision_notice_date.
-    date_decided = get_date_field("Date Decided:")
-    if date_decided:
-        out["decision_notice_date"] = date_decided
 
     # Assessment stages table.
     # Development.i portals use a 4-column table: Description, Status, Start Date, Date Completed.
@@ -473,11 +532,11 @@ def extract_detail(page: Page) -> dict:
 
     # Associated properties
     properties = []
-    prop_links = page.locator("a[href*='PropertyDetailsView?landNumber=']")
+    prop_links = page.locator(PROPERTY_LINK_SELECTOR)
     for i in range(prop_links.count()):
         link = prop_links.nth(i)
         href = link.get_attribute("href") or ""
-        m = re.search(r"landNumber=(\d+)", href)
+        m = PROPERTY_LAND_NUMBER_RE.search(href)
         if m:
             land_number = m.group(1)
             address = link.text_content().strip()
@@ -506,11 +565,11 @@ def extract_property_lot(page: Page, cfg: CouncilConfig, land_number: str) -> di
         h5 = h5s.nth(i)
         text = h5.text_content().strip()
         parent = h5.locator("xpath=../..")
-        value_div = parent.locator(".col-sm-8 span")
+        value_div = parent.locator(PROPERTY_VALUE_SELECTOR)
 
-        if "Lot on Plan" in text and value_div.count() > 0:
+        if PROPERTY_LOT_LABEL in text and value_div.count() > 0:
             lot_on_plan = value_div.first.text_content().strip()
-        elif "Address" in text and value_div.count() > 0:
+        elif PROPERTY_ADDRESS_LABEL in text and value_div.count() > 0:
             address = value_div.first.text_content().strip()
 
     return {
@@ -773,7 +832,7 @@ def run_scrape(page: Page, conn, cfg: CouncilConfig, args) -> None:
 
                 records = []
                 for row in rows:
-                    mapped = map_csv_record(row, group, groups_cfg)
+                    mapped = map_csv_record(row, group, cfg)
                     if mapped:
                         records.append(mapped)
 
@@ -812,18 +871,13 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
         return
 
     detail: dict = {}
-    detail["status"] = response.get("progress")
-    detail["decision"] = response.get("stage")
-    detail["application_type"] = response.get("applicationType")
-    detail["assessment_level"] = response.get("assessmentLevel")
-    detail["description"] = response.get("description")
-    detail["use_categories"] = response.get("useLevel1")
+    for json_key, db_col in JSON_API_FIELD_MAP.items():
+        val = response.get(json_key)
+        if val:
+            detail[db_col] = val
 
     # Parse date fields from epoch ms
-    for json_key, db_col in [
-        ("dateReceived", "lodgement_date"),
-        ("dateDecided", "decision_notice_date"),
-    ]:
+    for json_key, db_col in JSON_API_DATE_FIELDS.items():
         ms = response.get(json_key)
         if ms and isinstance(ms, (int, float)) and ms > 0:
             detail[db_col] = datetime.utcfromtimestamp(ms / 1000).date()
@@ -852,11 +906,13 @@ def _enrich_via_json_api(page: Page, conn, cfg: CouncilConfig, app_num: str, app
     properties = response.get("associatedProperties", [])
     enriched_properties = []
     for prop in properties:
-        enriched_properties.append({
-            "land_number": str(prop.get("landNumber", "")),
-            "lot_on_plan": prop.get("lotPlan"),
-            "location_address": prop.get("address"),
-        })
+        p = {}
+        for json_key, db_col in JSON_API_PROPERTY_FIELDS.items():
+            val = prop.get(json_key)
+            if json_key == "landNumber" and val is not None:
+                val = str(val)
+            p[db_col] = val
+        enriched_properties.append(p)
 
     primary_cadastre, primary_suburb = upsert_da_properties(
         conn, cfg, app_num, enriched_properties
@@ -954,7 +1010,7 @@ def enrich_one(page: Page, conn, cfg: CouncilConfig, app_num: str, app_type: str
                 upsert_detail(conn, cfg, app_num, {})
                 return
 
-    detail = extract_detail(page)
+    detail = extract_detail(page, cfg)
 
     # For portals where address is embedded at end of description, extract it.
     if cfg["description_addr_at_end"] and not detail.get("location_address"):

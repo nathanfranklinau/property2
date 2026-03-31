@@ -13,7 +13,14 @@ Usage:
     python import_westerndowns_da.py --app APP_NUMBER   # enrich one app
 """
 
-from import_developmenti_da import GROUPS_DA_ONLY, CouncilConfig, run
+from import_developmenti_da import (
+    GROUPS_DA_ONLY,
+    CouncilConfig,
+    run,
+    DEFAULT_CSV_FIELD_MAP,
+    DEFAULT_DETAIL_TEXT_FIELDS,
+    DEFAULT_DETAIL_DATE_FIELDS,
+)
 
 CONFIG: CouncilConfig = {
     "name": "Western Downs",
@@ -35,6 +42,9 @@ CONFIG: CouncilConfig = {
     # SSL certificate is expired — suppress cert validation errors.
     "ignore_https_errors": True,
     "use_filter_direct": False,
+    "csv_field_map": DEFAULT_CSV_FIELD_MAP,
+    "detail_text_fields": DEFAULT_DETAIL_TEXT_FIELDS,
+    "detail_date_fields": DEFAULT_DETAIL_DATE_FIELDS,
 }
 
 if __name__ == "__main__":

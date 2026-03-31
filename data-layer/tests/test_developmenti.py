@@ -11,6 +11,12 @@ from datetime import date
 from import_developmenti_da import (
     STAGE_COLUMN_MAP,
     CouncilConfig,
+    DEFAULT_CSV_FIELD_MAP,
+    DEFAULT_DETAIL_TEXT_FIELDS,
+    DEFAULT_DETAIL_DATE_FIELDS,
+    JSON_API_FIELD_MAP,
+    JSON_API_DATE_FIELDS,
+    JSON_API_PROPERTY_FIELDS,
     _extract_description_address,
     _parse_rendered_date,
     parse_csv,
@@ -59,6 +65,7 @@ class TestCouncilConfigs:
             "filter_panel_needs_show", "date_input_selector", "group_select_id",
             "detail_param", "has_detail_pages", "description_addr_at_end",
             "ignore_https_errors", "use_filter_direct",
+            "csv_field_map", "detail_text_fields", "detail_date_fields",
         ]
         for key in required_keys:
             assert key in cfg, f"Missing key '{key}' in {slug} config"
@@ -286,9 +293,12 @@ class TestParseCsv:
 # ── CSV record mapping ──────────────────────────────────────────────────────
 
 class TestMapCsvRecord:
-    GROUPS_CFG = {
-        "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
-        "building": {"label": "Building", "include_da": False, "include_ba": True, "include_plumb": False},
+    TEST_CFG = {
+        "groups": {
+            "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
+            "building": {"label": "Building", "include_da": False, "include_ba": True, "include_plumb": False},
+        },
+        "csv_field_map": DEFAULT_CSV_FIELD_MAP,
     }
 
     def test_standard_record(self):
@@ -301,7 +311,7 @@ class TestMapCsvRecord:
             "application type": "Material Change of Use",
             "suburb": "IPSWICH",
         }
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result is not None
         assert result["application_number"] == "MCU/2025/001"
         assert result["lodgement_date"] == date(2025, 3, 15)
@@ -311,17 +321,17 @@ class TestMapCsvRecord:
 
     def test_building_group(self):
         row = {"application number": "BA/2025/001", "status": "Active"}
-        result = map_csv_record(row, "building", self.GROUPS_CFG)
+        result = map_csv_record(row, "building", self.TEST_CFG)
         assert result["application_group"] == "Building"
 
     def test_missing_app_number_returns_none(self):
         row = {"status": "Active", "description": "Test"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result is None
 
     def test_terminal_status_sets_closed(self):
         row = {"application number": "APP-001", "status": "Completed"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["monitoring_status"] == "closed"
 
     def test_alternate_column_names(self):
@@ -334,7 +344,7 @@ class TestMapCsvRecord:
             "type": "Building Works",
             "locality": "REDBANK",
         }
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["application_number"] == "APP-002"
         assert result["description"] == "Building work"
         assert result["status"] == "Under Assessment"
@@ -343,27 +353,27 @@ class TestMapCsvRecord:
 
     def test_date_format_dd_mm_yy(self):
         row = {"application number": "APP-003", "date submitted": "15/03/25"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["lodgement_date"] == date(2025, 3, 15)
 
     def test_date_format_iso(self):
         row = {"application number": "APP-004", "date submitted": "2025-03-15"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["lodgement_date"] == date(2025, 3, 15)
 
     def test_invalid_date_sets_none(self):
         row = {"application number": "APP-005", "date submitted": "not-a-date"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["lodgement_date"] is None
 
     def test_strips_app_number_whitespace(self):
         row = {"application number": "  APP-006  "}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["application_number"] == "APP-006"
 
     def test_date_received_variant(self):
         row = {"application number": "APP-007", "date received": "20/06/2025"}
-        result = map_csv_record(row, "development", self.GROUPS_CFG)
+        result = map_csv_record(row, "development", self.TEST_CFG)
         assert result["lodgement_date"] == date(2025, 6, 20)
 
 
@@ -458,8 +468,11 @@ class TestBuildParser:
 class TestCsvToRecordPipeline:
     """End-to-end test of CSV parsing into mapped records."""
 
-    GROUPS_CFG = {
-        "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
+    TEST_CFG = {
+        "groups": {
+            "development": {"label": "Development", "include_da": True, "include_ba": False, "include_plumb": False},
+        },
+        "csv_field_map": DEFAULT_CSV_FIELD_MAP,
     }
 
     SAMPLE_CSV = (
@@ -475,7 +488,7 @@ class TestCsvToRecordPipeline:
 
         records = []
         for row in rows:
-            mapped = map_csv_record(row, "development", self.GROUPS_CFG)
+            mapped = map_csv_record(row, "development", self.TEST_CFG)
             if mapped:
                 records.append(mapped)
 
@@ -593,3 +606,70 @@ class TestExtractDescriptionAddressAtEnd:
         desc = "Operational Works - Civil - 1-5 Industrial Drive CHARLTON QLD 4350"
         result = _extract_description_address(desc, addr_at_end=True)
         assert result == "1-5 Industrial Drive CHARLTON QLD 4350"
+
+
+# ── Field mapping constant validation ────────────────────────────────────────
+
+class TestFieldMappingConstants:
+    """Verify mapping constant dicts are well-formed."""
+
+    def test_csv_field_map_values_are_nonempty_string_lists(self):
+        for db_col, variants in DEFAULT_CSV_FIELD_MAP.items():
+            assert isinstance(variants, list), f"{db_col}: expected list"
+            assert len(variants) > 0, f"{db_col}: empty variants list"
+            for v in variants:
+                assert isinstance(v, str) and v, f"{db_col}: invalid variant {v!r}"
+
+    def test_detail_text_field_labels_end_with_colon(self):
+        for db_col, labels in DEFAULT_DETAIL_TEXT_FIELDS.items():
+            assert isinstance(labels, list) and len(labels) > 0
+            for label in labels:
+                assert label.endswith(":"), f"{db_col}: label {label!r} should end with ':'"
+
+    def test_detail_date_field_labels_end_with_colon(self):
+        for db_col, labels in DEFAULT_DETAIL_DATE_FIELDS.items():
+            assert isinstance(labels, list) and len(labels) > 0
+            for label in labels:
+                assert label.endswith(":"), f"{db_col}: label {label!r} should end with ':'"
+
+    def test_no_overlap_between_text_and_date_fields(self):
+        text_cols = set(DEFAULT_DETAIL_TEXT_FIELDS.keys())
+        date_cols = set(DEFAULT_DETAIL_DATE_FIELDS.keys())
+        overlap = text_cols & date_cols
+        assert not overlap, f"Columns in both text and date maps: {overlap}"
+
+    def test_json_api_field_map_values_are_strings(self):
+        for json_key, db_col in JSON_API_FIELD_MAP.items():
+            assert isinstance(json_key, str) and json_key
+            assert isinstance(db_col, str) and db_col
+
+    def test_json_api_date_fields_are_strings(self):
+        for json_key, db_col in JSON_API_DATE_FIELDS.items():
+            assert isinstance(json_key, str) and json_key
+            assert isinstance(db_col, str) and db_col
+
+    def test_json_api_property_fields_are_strings(self):
+        for json_key, db_col in JSON_API_PROPERTY_FIELDS.items():
+            assert isinstance(json_key, str) and json_key
+            assert isinstance(db_col, str) and db_col
+
+    @pytest.mark.parametrize("slug", COUNCILS.keys())
+    def test_council_csv_field_map_is_valid(self, slug: str):
+        fm = COUNCILS[slug]["csv_field_map"]
+        assert isinstance(fm, dict)
+        for db_col, variants in fm.items():
+            assert isinstance(variants, list) and len(variants) > 0
+
+    @pytest.mark.parametrize("slug", COUNCILS.keys())
+    def test_council_detail_text_fields_is_valid(self, slug: str):
+        tf = COUNCILS[slug]["detail_text_fields"]
+        assert isinstance(tf, dict)
+        for db_col, labels in tf.items():
+            assert isinstance(labels, list) and len(labels) > 0
+
+    @pytest.mark.parametrize("slug", COUNCILS.keys())
+    def test_council_detail_date_fields_is_valid(self, slug: str):
+        df = COUNCILS[slug]["detail_date_fields"]
+        assert isinstance(df, dict)
+        for db_col, labels in df.items():
+            assert isinstance(labels, list) and len(labels) > 0
