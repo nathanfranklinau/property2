@@ -594,6 +594,22 @@ def test_lot_only_with_street(lookups):
     assert fields["street_number"] == ""
 
 
+def test_lot_with_street_unit(lookups):
+    """Unit+lot: 'Unit 1, Lot 20, 155-157 Glenmore Road' — unit must be included."""
+    rec = _unit_rec(lot_number="20", street_number="155", street_number_last="157",
+                   street_name="Glenmore", street_type="Road", street_type_code="ROAD")
+    results = perm_lot_with_street(rec, lookups)
+    addr, ptype, fields = results[0]
+    assert ptype == "lot_with_street"
+    assert addr.startswith("Flat 9"), addr  # unit must come first
+    assert "Lot 20" in addr
+    assert "155" in addr
+    assert fields["unit_type"] == "Flat"
+    assert fields["unit_number"] == "9"
+    assert fields["lot_keyword"] == "Lot"
+    assert fields["lot_number"] == "20"
+
+
 def test_lot_abbrev_returns_empty(lookups):
     # perm_lot_abbrev removed: 'L' is the GNAF Level code — would create ambiguous training data
     rec = _simple_rec(lot_number="2556")
@@ -603,6 +619,62 @@ def test_lot_abbrev_returns_empty(lookups):
 def test_lot_returns_empty_when_no_lot(lookups):
     assert perm_lot_with_street(_simple_rec(), lookups) == []
     assert perm_lot_abbrev(_simple_rec(), lookups) == []
+
+
+def test_all_perms_include_lot_when_lot_present(lookups):
+    """Every permutation for a lot record must contain 'Lot N' — never a bare street address."""
+    rec = _simple_rec(lot_number="20")
+    from training.permutations import generate_permutations
+    perms = generate_permutations(rec, lookups, max_perms=100, include_noisy=True)
+    for addr, ptype, _ in perms:
+        assert "Lot 20" in addr, f"ptype={ptype!r} missing 'Lot 20': {addr!r}"
+
+
+def test_all_perms_include_lot_when_unit_and_lot_present(lookups):
+    """Every permutation for a unit+lot record must contain both the unit and 'Lot N'."""
+    rec = _unit_rec(lot_number="20", street_number="155", street_number_last="157",
+                    street_name="Glenmore", street_type="Road", street_type_code="ROAD")
+    from training.permutations import generate_permutations
+    perms = generate_permutations(rec, lookups, max_perms=100, include_noisy=True)
+    for addr, ptype, _ in perms:
+        assert "Lot 20" in addr, f"ptype={ptype!r} missing 'Lot 20': {addr!r}"
+        assert "9" in addr, f"ptype={ptype!r} missing unit number '9': {addr!r}"
+
+
+def test_minimal_returns_empty_when_lot_present(lookups):
+    from training.permutations import perm_minimal
+    assert perm_minimal(_simple_rec(lot_number="20"), lookups) == []
+
+
+def test_slash_perms_return_empty_when_lot_present(lookups):
+    from training.permutations import (
+        perm_slash_notation, perm_slash_unit_level_street, perm_slash_with_type,
+    )
+    rec = _unit_rec(lot_number="20")
+    assert perm_slash_notation(rec, lookups) == []
+    assert perm_slash_with_type(rec, lookups) == []
+    rec_level = _complex_rec(lot_number="20")
+    assert perm_slash_unit_level_street(rec_level, lookups) == []
+
+
+def test_canonical_includes_lot(lookups):
+    """perm_canonical must include 'Lot N' in the formatted address."""
+    rec = _simple_rec(lot_number="20")
+    addr, _, fields = perm_canonical(rec, lookups)[0]
+    assert "Lot 20" in addr, addr
+    assert fields["lot_keyword"] == "Lot"
+    assert fields["lot_number"] == "20"
+    assert fields["street_number"] == "16"  # street_number != lot_number
+
+
+def test_canonical_lot_only(lookups):
+    """Lot-only record: canonical must show 'Lot 16 Banjo Street' not '16 Banjo Street'."""
+    rec = _simple_rec(lot_number="16")  # street_number is also "16"
+    addr, _, fields = perm_canonical(rec, lookups)[0]
+    assert addr.startswith("Lot 16"), addr
+    assert "16 Banjo" not in addr, f"number repeated: {addr!r}"
+    assert fields["lot_keyword"] == "Lot"
+    assert fields["street_number"] == ""  # blanked for lot-only
 
 
 # ---------------------------------------------------------------------------

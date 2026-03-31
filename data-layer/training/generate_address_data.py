@@ -5,7 +5,7 @@ permutations, and writes paired (input, label) rows to CSV or Parquet.
 
 Usage:
     sh run.sh training/generate_address_data.py \
-        --output training/data/address_training.parquet \
+        --output training/data/address_training.csv \
         --states QLD \
         --limit 50000 \
         --seed 55 \

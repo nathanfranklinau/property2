@@ -152,26 +152,44 @@ def _street_block(
     street_type_override: str | None = None,
     suffix_override: str | None = None,
     spaced_range: bool = False,
+    omit_number: bool = False,
 ) -> str:
-    """Build 'NN[-MM] Name Type [Suffix]' block."""
-    num = rec["street_number"]
-    last = rec["street_number_last"]
-    if last:
-        sep = " - " if spaced_range else "-"
-        num_part = f"{num}{sep}{last}"
-    else:
-        num_part = num
+    """Build 'NN[-MM] Name Type [Suffix]' block.
 
+    omit_number=True builds 'Name Type [Suffix]' only — used for lot-only addresses
+    where the lot prefix replaces the street number.
+    """
     name = _tc(rec["street_name"])
     st = street_type_override if street_type_override is not None else _tc(rec["street_type"])
     sfx = suffix_override if suffix_override is not None else _tc(rec["street_suffix"])
 
-    parts = [num_part, name]
+    if omit_number:
+        parts = [name]
+    else:
+        num = rec["street_number"]
+        last = rec["street_number_last"]
+        if last:
+            sep = " - " if spaced_range else "-"
+            num_part = f"{num}{sep}{last}"
+        else:
+            num_part = num
+        parts = [num_part, name]
+
     if st:
         parts.append(st)
     if sfx:
         parts.append(sfx)
     return " ".join(parts)
+
+
+def _is_lot_only(rec: AddressRecord) -> bool:
+    """True when the lot number was used as the street_number fallback (no real street number)."""
+    return bool(rec.get("lot_number")) and rec["street_number"] == rec["lot_number"]
+
+
+def _lot_street_block(rec: AddressRecord, **kwargs) -> str:
+    """Like _street_block but omits street number for lot-only addresses."""
+    return _street_block(rec, omit_number=_is_lot_only(rec), **kwargs)
 
 
 def _locality_block(
@@ -216,6 +234,11 @@ def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
 
     Keys match FIELD_ORDER in prepare_iob.py. Empty string means the field
     is absent from this record (alignment code skips empty values).
+
+    When a lot is present, lot_keyword is always "Lot" so the literal word gets
+    an explicit IOB label rather than being left as O. For lot-only addresses
+    (lot == street_number), street_number is blanked because the lot prefix
+    stands in for the number in the formatted string.
     """
     return {
         "building_name": _tc(rec.get("building_name")) or "",
@@ -223,9 +246,9 @@ def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
         "unit_number":   rec.get("flat_number") or "",
         "level_type":    _tc(rec.get("level_type")) or "",
         "level_number":  rec.get("level_number") or "",
-        "lot_keyword":   "",  # only populated by perm_lot_with_street
+        "lot_keyword":   "Lot" if rec.get("lot_number") else "",
         "lot_number":    rec.get("lot_number") or "",
-        "street_number": rec["street_number"],
+        "street_number": "" if _is_lot_only(rec) else rec["street_number"],
         "street_number_last": rec.get("street_number_last") or "",
         "street_name":   _tc(rec["street_name"]),
         "street_type":   _tc(rec.get("street_type")) or "",
@@ -249,7 +272,14 @@ def _canonical(
     locality_str: str | None = None,
     separator: str = ", ",
 ) -> str:
-    """Assemble address components into a full string."""
+    """Assemble address components into a full string.
+
+    When the record has a lot number, 'Lot N' is always included before the street
+    block. For lot-only addresses (lot == street_number), the street number is
+    omitted from the street block since the lot prefix represents it.
+    When street_str is provided explicitly by the caller, the caller is responsible
+    for omitting the number on lot-only records (use _lot_street_block).
+    """
     unit = unit_str if unit_str is not None else (
         _unit_prefix(rec) if rec.get("flat_number") else ""
     )
@@ -257,10 +287,11 @@ def _canonical(
         _level_prefix(rec) if rec.get("level_number") else ""
     )
     building = building_str if building_str is not None else _tc(rec.get("building_name"))
-    street = street_str if street_str is not None else _street_block(rec)
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
+    street = street_str if street_str is not None else _lot_street_block(rec)
     locality = locality_str if locality_str is not None else _locality_block(rec)
 
-    return _assemble([unit, level, building, street, locality], separator)
+    return _assemble([unit, level, building, lot, street, locality], separator)
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +315,13 @@ def perm_street_abbrev_gnaf(
     # Skip if abbreviation equals the full name (e.g. WAY → WAY — not useful)
     if abbrev.upper() == (rec.get("street_type_code") or "").upper():
         return []
-    street = _street_block(rec, street_type_override=abbrev_title)
+    street = _lot_street_block(rec, street_type_override=abbrev_title)
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     addr = _assemble([
         _unit_prefix(rec) if rec.get("flat_number") else "",
         _level_prefix(rec) if rec.get("level_number") else "",
         _tc(rec.get("building_name")),
+        lot,
         street,
         _locality_block(rec),
     ])
@@ -304,12 +337,14 @@ def perm_street_abbrev_informal(
         return []
     extras = EXTRA_STREET_TYPE_VARIANTS.get(code.upper(), [])
     results = []
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     for variant in extras:
-        street = _street_block(rec, street_type_override=variant)
+        street = _lot_street_block(rec, street_type_override=variant)
         addr = _assemble([
             _unit_prefix(rec) if rec.get("flat_number") else "",
             _level_prefix(rec) if rec.get("level_number") else "",
             _tc(rec.get("building_name")),
+            lot,
             street,
             _locality_block(rec),
         ])
@@ -326,7 +361,7 @@ def perm_slash_notation(
     would be misread as Level 9, 40 Smith St. perm_slash_unit_level_street covers
     that case with '9/11/40 Smith St'.
     """
-    if not rec.get("flat_number") or rec.get("level_number"):
+    if not rec.get("flat_number") or rec.get("level_number") or rec.get("lot_number"):
         return []
     flat_num = rec["flat_number"]
     abbrev = rec.get("street_type_abbrev")
@@ -363,7 +398,7 @@ def perm_slash_unit_level_street(
 
     Only applicable when both flat_number and level_number are present.
     """
-    if not rec.get("flat_number") or not rec.get("level_number"):
+    if not rec.get("flat_number") or not rec.get("level_number") or rec.get("lot_number"):
         return []
     flat_num = rec["flat_number"]
     lvl_num = rec["level_number"]
@@ -393,7 +428,7 @@ def perm_slash_with_type(
     drop Level 11, producing an incorrect label. perm_slash_unit_level_street
     covers the unit+level case with '9/11/40 Smith St'.
     """
-    if not rec.get("flat_number") or not rec.get("flat_type") or rec.get("level_number"):
+    if not rec.get("flat_number") or not rec.get("flat_type") or rec.get("level_number") or rec.get("lot_number"):
         return []
     flat_num = rec["flat_number"]
     flat_type = _tc(rec["flat_type"])
@@ -503,25 +538,28 @@ def perm_suffix_abbrev(
     code = rec.get("street_suffix_code")  # e.g. "N"
     extras = EXTRA_STREET_SUFFIX_VARIANTS.get(full_upper, [])
     results = []
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     # GNAF code (single/double letter abbreviation)
     if code and code.upper() != full_upper:
         code_title = code.title()
-        street = _street_block(rec, suffix_override=code_title)
+        street = _lot_street_block(rec, suffix_override=code_title)
         addr = _assemble([
             _unit_prefix(rec) if rec.get("flat_number") else "",
             _level_prefix(rec) if rec.get("level_number") else "",
             _tc(rec.get("building_name")),
+            lot,
             street,
             _locality_block(rec),
         ])
         results.append((addr, "suffix_abbrev_gnaf", {**_canonical_fields(rec), "street_suffix": code_title}))
     # Informal variants (Nth, Sth…)
     for variant in extras:
-        street = _street_block(rec, suffix_override=variant)
+        street = _lot_street_block(rec, suffix_override=variant)
         addr = _assemble([
             _unit_prefix(rec) if rec.get("flat_number") else "",
             _level_prefix(rec) if rec.get("level_number") else "",
             _tc(rec.get("building_name")),
+            lot,
             street,
             _locality_block(rec),
         ])
@@ -557,7 +595,7 @@ def perm_minimal(
     Skipped when unit or level is present — '40 Marcus Clarke St' is the building
     address, not Suite 9 Level 11. Stripping unit/level changes the target address.
     """
-    if rec.get("flat_number") or rec.get("level_number"):
+    if rec.get("flat_number") or rec.get("level_number") or rec.get("lot_number"):
         return []
     abbrev = rec.get("street_type_abbrev")
     st = abbrev.title() if abbrev and abbrev.upper() != (rec.get("street_type_code") or "").upper() else _tc(rec.get("street_type"))
@@ -684,8 +722,8 @@ def perm_building_omitted(
             addr = _canonical(rec, building_str="", unit_str=unit_str, separator=" ")
             results.append((addr, "building_omitted_no_commas", {**base, "unit_type": variant}))
 
-    # Slash notation without building (unit, no level)
-    if rec.get("flat_number") and not rec.get("level_number"):
+    # Slash notation without building (unit, no level) — skipped when lot present
+    if rec.get("flat_number") and not rec.get("level_number") and not rec.get("lot_number"):
         flat_num = rec["flat_number"]
         num_part = rec["street_number"]
         if rec.get("street_number_last"):
@@ -700,8 +738,8 @@ def perm_building_omitted(
         results.append((_assemble([slash_str, _locality_block(rec)]),
                          "building_omitted_slash", {**base, "unit_type": "", "street_type": st or ""}))
 
-    # Triple-slash without building (unit + level)
-    if rec.get("flat_number") and rec.get("level_number"):
+    # Triple-slash without building (unit + level) — skipped when lot present
+    if rec.get("flat_number") and rec.get("level_number") and not rec.get("lot_number"):
         flat_num = rec["flat_number"]
         lvl_num = rec["level_number"]
         num_part = rec["street_number"]
@@ -727,11 +765,13 @@ def perm_number_range_spaced(
     """Spaced range: '12 - 14 Smith Street'."""
     if not rec.get("street_number_last"):
         return []
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     street = _street_block(rec, spaced_range=True)
     addr = _assemble([
         _unit_prefix(rec) if rec.get("flat_number") else "",
         _level_prefix(rec) if rec.get("level_number") else "",
         _tc(rec.get("building_name")),
+        lot,
         street,
         _locality_block(rec),
     ])
@@ -743,35 +783,19 @@ def perm_lot_with_street(
 ) -> list[tuple[str, str, dict[str, str]]]:
     """Lot+street: 'Lot 2556, 12 Daisy Hill Road, Buckajo QLD 2550'.
 
-    For lot-only addresses (lot_number == street_number, no separate street number),
-    produces 'Lot 9 Burton Close, Malanda QLD 4885' — lot prefix replaces the number.
-    For addresses with both lot and street number, produces 'Lot 24, 107 Golden Four Drive'.
+    Now that _canonical always includes the lot, this function is a thin wrapper
+    that produces the same string as perm_canonical for lot records. It exists so
+    the permutation_type label 'lot_with_street' still appears in the dataset.
+    Deduplication in generate_permutations removes the duplicate if it matches canonical.
+
+    Strata title: lot_number == flat_number means the lot IS the unit (APT 3414 = Lot 3414).
+    'Lot 3414, 222 Margaret Street' is not a real address form — skip these.
     """
     if not rec.get("lot_number"):
         return []
-    # Strata title: lot_number == flat_number means the lot IS the unit (e.g. APT 3414 = Lot 3414).
-    # "Lot 3414, 222 Margaret Street" is not a real address form for a strata unit.
     if rec.get("flat_number") and rec["lot_number"] == rec["flat_number"]:
         return []
-    lot_str = f"Lot {rec['lot_number']}"
-    # Lot-only address: lot number was used as street_number fallback — don't repeat it
-    if rec["street_number"] == rec["lot_number"]:
-        street_parts = [_tc(rec["street_name"])]
-        if rec.get("street_type"):
-            street_parts.append(_tc(rec["street_type"]))
-        if rec.get("street_suffix"):
-            street_parts.append(_tc(rec["street_suffix"]))
-        street_str = " ".join(street_parts)
-        addr = _assemble([lot_str, street_str, _locality_block(rec)])
-        # lot_keyword captures "Lot" (B-LOT_KEYWORD) so it gets an explicit label —
-        # not O — preventing the model from confusing it with BUILDING_NAME.
-        # lot_number is the bare number. street_number is blanked (lot-only address).
-        fields = {**_canonical_fields(rec), "lot_keyword": "Lot", "street_number": ""}
-        return [(addr, "lot_with_street", fields)]
-    else:
-        addr = _assemble([lot_str, _street_block(rec), _locality_block(rec)])
-        fields = {**_canonical_fields(rec), "lot_keyword": "Lot"}
-    return [(addr, "lot_with_street", fields)]
+    return [(_canonical(rec), "lot_with_street", _canonical_fields(rec))]
 
 
 def perm_lot_abbrev(
@@ -822,10 +846,11 @@ def perm_reversed(
 ) -> list[tuple[str, str, dict[str, str]]]:
     """Suburb-first: 'Brisbane Qld 4000, 12 Smith Street North'."""
     locality = _locality_block(rec)
-    street = _street_block(rec)
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
+    street = _lot_street_block(rec)
     unit = _unit_prefix(rec) if rec.get("flat_number") else ""
     level = _level_prefix(rec) if rec.get("level_number") else ""
-    addr = _assemble([locality, unit, level, street])
+    addr = _assemble([locality, unit, level, lot, street])
     return [(addr, "reversed", _canonical_fields(rec))]
 
 
@@ -871,6 +896,7 @@ def perm_number_prefix(
         return []
     unit = _unit_prefix(rec) if rec.get("flat_number") else ""
     level = _level_prefix(rec) if rec.get("level_number") else ""
+    lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     locality = _locality_block(rec)
     fvals = _canonical_fields(rec)
     results = []
@@ -881,7 +907,7 @@ def perm_number_prefix(
         if sfx:
             street_parts.append(sfx)
         street = " ".join(street_parts)
-        addr = _assemble([unit, level, street, locality])
+        addr = _assemble([unit, level, lot, street, locality])
         results.append((addr, ptype, fvals))
     return results
 
