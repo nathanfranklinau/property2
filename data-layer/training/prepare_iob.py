@@ -46,6 +46,7 @@ FIELD_ORDER = [
     "unit_number",
     "level_type",
     "level_number",
+    "lot_keyword",   # captures the literal word "Lot" — mirrors unit_type/level_type pattern
     "lot_number",
     "street_number",
     "street_number_last",

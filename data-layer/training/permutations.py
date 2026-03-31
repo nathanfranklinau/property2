@@ -223,6 +223,7 @@ def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
         "unit_number":   rec.get("flat_number") or "",
         "level_type":    _tc(rec.get("level_type")) or "",
         "level_number":  rec.get("level_number") or "",
+        "lot_keyword":   "",  # only populated by perm_lot_with_street
         "lot_number":    rec.get("lot_number") or "",
         "street_number": rec["street_number"],
         "street_number_last": rec.get("street_number_last") or "",
@@ -752,7 +753,7 @@ def perm_lot_with_street(
     # "Lot 3414, 222 Margaret Street" is not a real address form for a strata unit.
     if rec.get("flat_number") and rec["lot_number"] == rec["flat_number"]:
         return []
-    lot = f"Lot {rec['lot_number']}"
+    lot_str = f"Lot {rec['lot_number']}"
     # Lot-only address: lot number was used as street_number fallback — don't repeat it
     if rec["street_number"] == rec["lot_number"]:
         street_parts = [_tc(rec["street_name"])]
@@ -761,17 +762,15 @@ def perm_lot_with_street(
         if rec.get("street_suffix"):
             street_parts.append(_tc(rec["street_suffix"]))
         street_str = " ".join(street_parts)
-        addr = _assemble([lot, street_str, _locality_block(rec)])
-        # Include "Lot " prefix in lot_number so the aligner labels both tokens as
-        # LOT_NUMBER (B- + I-) rather than leaving "Lot" unlabelled (O), which caused
-        # the model to misclassify the keyword as BUILDING_NAME.
-        # street_number is blanked so "210" isn't double-labelled.
-        fields = {**_canonical_fields(rec), "street_number": "", "lot_number": lot}
+        addr = _assemble([lot_str, street_str, _locality_block(rec)])
+        # lot_keyword captures "Lot" (B-LOT_KEYWORD) so it gets an explicit label —
+        # not O — preventing the model from confusing it with BUILDING_NAME.
+        # lot_number is the bare number. street_number is blanked (lot-only address).
+        fields = {**_canonical_fields(rec), "lot_keyword": "Lot", "street_number": ""}
         return [(addr, "lot_with_street", fields)]
     else:
-        addr = _assemble([lot, _street_block(rec), _locality_block(rec)])
-        # Include "Lot " prefix so the aligner labels it as part of LOT_NUMBER.
-        fields = {**_canonical_fields(rec), "lot_number": lot}
+        addr = _assemble([lot_str, _street_block(rec), _locality_block(rec)])
+        fields = {**_canonical_fields(rec), "lot_keyword": "Lot"}
     return [(addr, "lot_with_street", fields)]
 
 

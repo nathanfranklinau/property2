@@ -157,23 +157,10 @@ class AddressParser:
 
         result = {field: " ".join(tokens) for field, tokens in field_words.items()}
 
-        # Correct misclassification of "Lot <number>" addresses.
-        #
-        # After retraining the model will label both tokens as LOT_NUMBER
-        # (B- + I-), producing lot_number="Lot 210" — strip the prefix.
-        if "lot_number" in result:
-            val = result["lot_number"]
-            if val.lower().startswith("lot "):
-                result["lot_number"] = val[4:].strip()
-
-        # Current (pre-retrain) model bug: for "Lot 210 Melrose Dr ..."
-        #   building_name = "Lot"
-        #   street_number = "210"   ← the lot number, misclassified
-        #   lot_number    = absent
-        # Move street_number → lot_number and drop the spurious building_name.
-        if result.get("building_name", "").lower() == "lot":
-            del result["building_name"]
-            if "lot_number" not in result and "street_number" in result:
-                result["lot_number"] = result.pop("street_number")
+        # lot_keyword captures the literal word "Lot" as its own IOB label (B-LOT_KEYWORD).
+        # It is a display-only prefix — not a GNAF field — so we exclude it from output,
+        # the same way "O" tokens are excluded. The model predicts it explicitly so it
+        # can never be misclassified as BUILDING_NAME.
+        result.pop("lot_keyword", None)
 
         return result

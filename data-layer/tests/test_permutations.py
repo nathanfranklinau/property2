@@ -574,8 +574,10 @@ def test_lot_with_street(lookups):
     assert ptype == "lot_with_street"
     assert "Lot 2556" in addr
     assert "16 Banjo Street" in addr
-    # "Lot" prefix must be included so the aligner labels both tokens as LOT_NUMBER.
-    assert fields["lot_number"] == "Lot 2556"
+    # lot_keyword captures "Lot" explicitly (not left as O where model confuses it
+    # with BUILDING_NAME). lot_number is only the bare number.
+    assert fields["lot_keyword"] == "Lot"
+    assert fields["lot_number"] == "2556"
     assert fields["street_number"] == "16"
 
 
@@ -587,8 +589,8 @@ def test_lot_only_with_street(lookups):
     assert ptype == "lot_with_street"
     assert addr.startswith("Lot 16"), addr
     assert "Banjo Street" in addr
-    # "Lot " prefix included in lot_number; street_number blanked to avoid double-labelling.
-    assert fields["lot_number"] == "Lot 16"
+    assert fields["lot_keyword"] == "Lot"
+    assert fields["lot_number"] == "16"
     assert fields["street_number"] == ""
 
 
