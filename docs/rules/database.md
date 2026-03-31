@@ -7,7 +7,7 @@
   - `qld_lga_boundaries`, `qld_planning_zones` (admin boundaries / zones)
   - `qld_goldcoast_zones`, `qld_goldcoast_*` (Gold Coast City Plan layers)
   - `qld_heritage_register` (QLD heritage register)
-  - **Exception:** `goldcoast_dev_applications` — additional parsed/structured columns (e.g. `development_category`, `dwelling_type`) are intentionally added on top of scraped data and must be preserved.
+  - **Exception:** `development_applications` — additional parsed/structured columns (e.g. `development_category`, `dwelling_type`) are intentionally added on top of scraped data and must be preserved.
 - **All spatial data uses SRID 7844** (GDA2020). Never SRID 4326 (WGS84).
 - **No ORM.** Use `pg` with parameterised queries (`$1`, `$2`, …).
 - **`property_analysis` is parcel-centric** — one row per `lot/plan`, shared across users. Do not duplicate analysis per user.

@@ -3,8 +3,8 @@
 Run from data-layer/: ../venv/bin/python addr_eval/fetch_data.py
 
 Produces:
-  addr_eval/data/gc_addresses.csv   — goldcoast_da_properties
-  addr_eval/data/bris_addresses.csv — brisbane_da_properties
+  addr_eval/data/gc_addresses.csv   — Gold Coast DA addresses
+  addr_eval/data/bris_addresses.csv — Brisbane DA addresses
 """
 
 import csv
@@ -46,21 +46,22 @@ def main() -> None:
     )
 
     # Gold Coast — all distinct location_address values plus ground truth parsed fields
-    # Note: goldcoast_da_properties has no postcode column; suburb=portal_suburb
     gc_rows = fetch(conn, """
-        SELECT DISTINCT ON (location_address)
-            location_address,
-            street_number,
-            street_name,
-            street_type,
-            unit_type,
-            unit_number,
-            unit_suffix,
-            portal_suburb AS suburb,
+        SELECT DISTINCT ON (daa.location_address)
+            daa.location_address,
+            daa.street_number,
+            daa.street_name,
+            daa.street_type,
+            daa.unit_type,
+            daa.unit_number,
+            daa.unit_suffix,
+            daa.suburb,
             NULL AS postcode
-        FROM goldcoast_da_properties
-        WHERE location_address IS NOT NULL
-        ORDER BY location_address
+        FROM development_application_addresses daa
+        JOIN development_applications da ON da.id = daa.application_id
+        WHERE daa.location_address IS NOT NULL
+          AND da.lga_pid = 'lgaaeff9c47295f'
+        ORDER BY daa.location_address
     """)
     write_csv(
         os.path.join(DATA_DIR, "gc_addresses.csv"),
@@ -71,19 +72,21 @@ def main() -> None:
 
     # Brisbane — all rows
     bris_rows = fetch(conn, """
-        SELECT DISTINCT ON (location_address)
-            location_address,
-            street_number,
-            street_name,
-            street_type,
-            unit_type,
-            unit_number,
-            unit_suffix,
+        SELECT DISTINCT ON (daa.location_address)
+            daa.location_address,
+            daa.street_number,
+            daa.street_name,
+            daa.street_type,
+            daa.unit_type,
+            daa.unit_number,
+            daa.unit_suffix,
             NULL as suburb,
             NULL as postcode
-        FROM brisbane_da_properties
-        WHERE location_address IS NOT NULL
-        ORDER BY location_address
+        FROM development_application_addresses daa
+        JOIN development_applications da ON da.id = daa.application_id
+        WHERE daa.location_address IS NOT NULL
+          AND da.lga_pid = 'lgaf711db11e308'
+        ORDER BY daa.location_address
     """)
     write_csv(
         os.path.join(DATA_DIR, "bris_addresses.csv"),

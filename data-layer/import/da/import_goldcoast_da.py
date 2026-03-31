@@ -80,6 +80,8 @@ BASE_URL = "https://cogc.cloud.infor.com/ePathway/epthprod/Web"
 ENQUIRY_URL = f"{BASE_URL}/GeneralEnquiry"
 LIST_URL = f"{ENQUIRY_URL}/EnquiryLists.aspx?ModuleCode=LAP"
 
+GOLDCOAST_LGA_PID = "lgaaeff9c47295f"
+
 FULL_START_DATE = date(2017, 7, 1)
 BATCH_SIZE = 200
 DEFAULT_DELAY = 1.5  # seconds between page navigations
@@ -525,7 +527,7 @@ def extract_detail_data(raw: dict) -> dict:
 
 def upsert_da_properties(conn, application_number: str, locations: list) -> tuple:
     """Upsert all property rows from the ePathway Property section into
-    goldcoast_da_properties.
+    development_application_addresses.
 
     Resolves cadastre_lotplan for each row and determines is_primary (the row
     that has a real street address, not just a bare lot reference).
@@ -536,9 +538,22 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
         return None, None
 
     cur = conn.cursor()
+
+    # Resolve application_id from unified table
     cur.execute(
-        "DELETE FROM goldcoast_da_properties WHERE application_number = %s",
-        (application_number,),
+        "SELECT id FROM development_applications WHERE lga_pid = %s AND application_number = %s",
+        (GOLDCOAST_LGA_PID, application_number),
+    )
+    row = cur.fetchone()
+    if not row:
+        log.warning(f"  No parent row for {application_number} \u2014 skipping properties")
+        cur.close()
+        return None, None
+    application_id = row[0]
+
+    cur.execute(
+        "DELETE FROM development_application_addresses WHERE application_id = %s",
+        (application_id,),
     )
 
     primary_cadastre = None
@@ -577,16 +592,15 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
 
         cur.execute(
             """
-            INSERT INTO goldcoast_da_properties
-                (application_number, lot_on_plan, suburb, location_address,
+            INSERT INTO development_application_addresses
+                (application_id, lot_on_plan, suburb, location_address,
                  cadastre_lotplan, is_primary,
                  cadastre_suburb, street_number, street_name, street_type,
-                 unit_type, unit_number, unit_suffix,
-                 portal_suburb, state)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 unit_type, unit_number, unit_suffix)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                application_number,
+                application_id,
                 lot_raw or None,
                 suburb_raw or None,
                 address_raw or None,
@@ -599,8 +613,6 @@ def upsert_da_properties(conn, application_number: str, locations: list) -> tupl
                 parsed["unit_type"],
                 parsed["unit_number"],
                 parsed["unit_suffix"],
-                suburb_raw or None,
-                "QLD",
             ),
         )
 
@@ -623,43 +635,31 @@ def upsert_summary(conn, records: list) -> int:
         return 0
 
     sql = """
-        INSERT INTO goldcoast_dev_applications
-            (application_number, description, application_type,
+        INSERT INTO development_applications
+            (lga_pid, state, source_system,
+             application_number, description, application_type,
              lodgement_date, status, suburb, location_address,
-             cadastre_lotplan,
-             epathway_id, monitoring_status, last_scraped_at,
-             street_number, street_name, street_type,
-             unit_type, unit_number, unit_suffix, postcode)
+             epathway_id, monitoring_status, last_scraped_at)
         VALUES
-            (%(application_number)s, %(description)s, %(application_type)s,
+            (%(lga_pid)s, 'QLD', 'epathway',
+             %(application_number)s, %(description)s, %(application_type)s,
              %(lodgement_date)s, %(status)s, %(suburb)s, %(location_address)s,
-             %(cadastre_lotplan)s,
-             %(epathway_id)s, %(monitoring_status)s, NOW(),
-             %(street_number)s, %(street_name)s, %(street_type)s,
-             %(unit_type)s, %(unit_number)s, %(unit_suffix)s, %(postcode)s)
-        ON CONFLICT (application_number) DO UPDATE SET
-            description      = COALESCE(EXCLUDED.description, goldcoast_dev_applications.description),
-            application_type = COALESCE(EXCLUDED.application_type, goldcoast_dev_applications.application_type),
-            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, goldcoast_dev_applications.lodgement_date),
+             %(epathway_id)s, %(monitoring_status)s, NOW())
+        ON CONFLICT (lga_pid, application_number) DO UPDATE SET
+            description      = COALESCE(EXCLUDED.description, development_applications.description),
+            application_type = COALESCE(EXCLUDED.application_type, development_applications.application_type),
+            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, development_applications.lodgement_date),
             status           = EXCLUDED.status,
             suburb           = EXCLUDED.suburb,
             location_address = EXCLUDED.location_address,
-            cadastre_lotplan = EXCLUDED.cadastre_lotplan,
-            epathway_id      = COALESCE(EXCLUDED.epathway_id, goldcoast_dev_applications.epathway_id),
+            epathway_id      = COALESCE(EXCLUDED.epathway_id, development_applications.epathway_id),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
-                WHEN goldcoast_dev_applications.status IS DISTINCT FROM EXCLUDED.status
+                WHEN development_applications.status IS DISTINCT FROM EXCLUDED.status
                 THEN NOW()
-                ELSE goldcoast_dev_applications.status_changed_at
+                ELSE development_applications.status_changed_at
             END,
-            last_scraped_at  = NOW(),
-            street_number    = EXCLUDED.street_number,
-            street_name      = EXCLUDED.street_name,
-            street_type      = EXCLUDED.street_type,
-            unit_type        = EXCLUDED.unit_type,
-            unit_number      = EXCLUDED.unit_number,
-            unit_suffix      = EXCLUDED.unit_suffix,
-            postcode         = EXCLUDED.postcode
+            last_scraped_at  = NOW()
     """
 
     cur = conn.cursor()
@@ -672,9 +672,8 @@ def upsert_summary(conn, records: list) -> int:
         status = rec.get("status")
         location_address = rec.get("location_address")
         parsed_addr = parse_location_address(location_address)
-        raw_lot_plan = extract_lot_plan_from_location_address(location_address)
-        cadastre_lp = resolve_cadastre_lotplan(conn, raw_lot_plan) if raw_lot_plan else None
         params = {
+            "lga_pid": GOLDCOAST_LGA_PID,
             "application_number": app_num,
             "description": rec.get("description"),
             "application_type": rec.get("application_type"),
@@ -682,16 +681,8 @@ def upsert_summary(conn, records: list) -> int:
             "status": status,
             "suburb": parsed_addr["suburb"],
             "location_address": location_address,
-            "cadastre_lotplan": cadastre_lp,
             "epathway_id": rec.get("epathway_id"),
             "monitoring_status": _monitoring_status_for(status),
-            "street_number": parsed_addr["street_number"],
-            "street_name": parsed_addr["street_name"],
-            "street_type": parsed_addr["street_type"],
-            "unit_type": parsed_addr["unit_type"],
-            "unit_number": parsed_addr["unit_number"],
-            "unit_suffix": parsed_addr["unit_suffix"],
-            "postcode": parsed_addr["postcode"],
         }
         cur.execute(sql, params)
         count += 1
@@ -707,13 +698,11 @@ def upsert_summary(conn, records: list) -> int:
 def upsert_detail(conn, application_number: str, detail: dict) -> None:
     """Update a single row with detail-page data."""
     sets = ["detail_scraped_at = NOW()", "last_scraped_at = NOW()"]
-    params = {"app_num": application_number}
+    params = {"app_num": application_number, "lga_pid": GOLDCOAST_LGA_PID}
 
     detail_columns = [
         "description",
-        "location_address", "suburb", "cadastre_suburb",
-        "street_number", "street_name", "street_type",
-        "unit_type", "unit_number", "unit_suffix", "postcode",
+        "location_address", "suburb",
         "responsible_officer",
         "workflow_events",
         "pre_assessment_started", "pre_assessment_completed",
@@ -733,26 +722,19 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
             sets.append(f"{col} = %({col})s")
             params[col] = detail[col]
 
-    # Resolve cadastre_lotplan from detail location_address if present
-    if "location_address" in detail and detail["location_address"]:
-        raw_lot_plan = extract_lot_plan_from_location_address(detail["location_address"])
-        cadastre_lp = resolve_cadastre_lotplan(conn, raw_lot_plan) if raw_lot_plan else None
-        sets.append("cadastre_lotplan = %(cadastre_lotplan)s")
-        params["cadastre_lotplan"] = cadastre_lp
-
     # Track when status changes
     if "status" in params:
         sets.append(
             "status_changed_at = CASE "
-            "WHEN goldcoast_dev_applications.status IS DISTINCT FROM %(status)s "
+            "WHEN development_applications.status IS DISTINCT FROM %(status)s "
             "THEN NOW() "
-            "ELSE goldcoast_dev_applications.status_changed_at END"
+            "ELSE development_applications.status_changed_at END"
         )
 
     sql = f"""
-        UPDATE goldcoast_dev_applications
+        UPDATE development_applications
         SET {', '.join(sets)}
-        WHERE application_number = %(app_num)s
+        WHERE lga_pid = %(lga_pid)s AND application_number = %(app_num)s
     """
     cur = conn.cursor()
     cur.execute(sql, params)
@@ -984,9 +966,9 @@ def run_enrich(conn, limit, include_closed=False, args=None) -> None:
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
-            "SELECT application_number, application_type FROM goldcoast_dev_applications "
-            "WHERE application_number = %s",
-            (target_app,),
+            "SELECT application_number, application_type FROM development_applications "
+            "WHERE lga_pid = %s AND application_number = %s",
+            (GOLDCOAST_LGA_PID, target_app),
         )
         row = cur.fetchone()
         cur.close()
@@ -996,20 +978,20 @@ def run_enrich(conn, limit, include_closed=False, args=None) -> None:
         _enrich_chunk(0, [(row[0], row[1])], args)
         return
 
-    conditions = ["detail_scraped_at IS NULL"]
+    conditions = ["detail_scraped_at IS NULL", "lga_pid = %s"]
     if not include_closed:
         conditions.append("monitoring_status = 'active'")
 
     sql = f"""
         SELECT application_number, application_type
-        FROM goldcoast_dev_applications
+        FROM development_applications
         WHERE {' AND '.join(conditions)}
         ORDER BY lodgement_date DESC NULLS LAST
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (GOLDCOAST_LGA_PID,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 
@@ -1049,14 +1031,14 @@ def run_monitor(page: Page, conn, limit) -> None:
     cur = conn.cursor()
     sql = """
         SELECT application_number, application_type
-        FROM goldcoast_dev_applications
-        WHERE monitoring_status = 'active'
+        FROM development_applications
+        WHERE lga_pid = %s AND monitoring_status = 'active'
         ORDER BY last_scraped_at ASC NULLS FIRST
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (GOLDCOAST_LGA_PID,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     log.info(f"{len(rows)} active applications to monitor")
 

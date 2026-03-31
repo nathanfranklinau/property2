@@ -119,6 +119,7 @@ async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: 
   const lotplan = `${lot}${plan}`;
   const sql = `SELECT da.application_number, da.description, da.application_type, da.lodgement_date, da.status,
             da.suburb, da.location_address,
+            da.source_system,
             da.pre_assessment_started, da.pre_assessment_completed,
             da.confirmation_notice_started, da.confirmation_notice_completed,
             da.decision_started, da.decision_completed,
@@ -129,12 +130,12 @@ async function fetchDevApplications(lot: string, plan: string): Promise<{ rows: 
             da.appeal_period_started, da.appeal_period_completed,
             da.workflow_events, da.documents_summary,
             da.first_scraped_at, da.last_scraped_at, da.detail_scraped_at,
-            dp.lot_on_plan, dp.cadastre_lotplan, dp.is_primary,
-            dp.cadastre_suburb, dp.street_number, dp.street_name, dp.street_type,
-            dp.unit_type, dp.unit_number
-     FROM goldcoast_dev_applications da
-     JOIN goldcoast_da_properties dp ON dp.application_number = da.application_number
-     WHERE dp.cadastre_lotplan = $1
+            daa.lot_on_plan, daa.cadastre_lotplan, daa.is_primary,
+            daa.cadastre_suburb, daa.street_number, daa.street_name, daa.street_type,
+            daa.unit_type, daa.unit_number
+     FROM development_applications da
+     JOIN development_application_addresses daa ON daa.application_id = da.id
+     WHERE daa.cadastre_lotplan = $1
      ORDER BY da.lodgement_date DESC`;
   const result = await db.query(sql, [lotplan]);
   return { rows: result.rows, query: sql };

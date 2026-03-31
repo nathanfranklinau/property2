@@ -2,13 +2,13 @@
  * GET /api/analysis/nearby-das?parcel_id=...&radius_m=...
  *
  * Returns development applications near a property, with centroid coordinates
- * for map display. Joins goldcoast_dev_applications to qld_cadastre_address
- * via goldcoast_da_properties to get point coordinates for spatial filtering.
+ * for map display. Joins development_applications to qld_cadastre_address
+ * via development_application_addresses to get point coordinates for spatial filtering.
  *
- * Only returns DAs that are matched to cadastre records (~58% of all DAs).
+ * Only returns DAs that are matched to cadastre records.
  * Unmatched DAs (no cadastre record) cannot be placed on the map.
  *
- * Gold Coast only — returns null for other LGAs.
+ * Works for all councils with DA data.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -28,6 +28,7 @@ export type NearbyDA = {
   unit_count: number | null;
   lot_split_from: number | null;
   lot_split_to: number | null;
+  source_system: string | null;
   epathway_id: number | null;
   lat: number;
   lng: number;
@@ -53,13 +54,6 @@ export async function GET(req: NextRequest) {
   const safeRadius = Math.min(Math.max(radiusM, 100), 5000);
 
   try {
-    // Check Gold Coast
-    const check = await db.query(
-      `SELECT ST_Centroid(geometry) AS geom FROM parcels WHERE id = $1 AND lga_name ILIKE '%gold coast%'`,
-      [parcelId]
-    );
-    if (check.rows.length === 0) return NextResponse.json(null);
-
     const result = await db.query<NearbyDA>(
       `WITH ref AS (
          SELECT ST_Centroid(geometry) AS geom
@@ -80,15 +74,16 @@ export async function GET(req: NextRequest) {
          da.unit_count,
          da.lot_split_from,
          da.lot_split_to,
+         da.source_system,
          da.epathway_id,
          ST_Y(a.geometry) AS lat,
          ST_X(a.geometry) AS lng,
          ST_Distance(a.geometry::geography, ref.geom::geography)::int AS distance_m
-       FROM goldcoast_dev_applications da
-       JOIN goldcoast_da_properties dp ON dp.application_number = da.application_number
-       JOIN qld_cadastre_address a ON a.lotplan = dp.cadastre_lotplan
+       FROM development_applications da
+       JOIN development_application_addresses daa ON daa.application_id = da.id
+       JOIN qld_cadastre_address a ON a.lotplan = daa.cadastre_lotplan
        CROSS JOIN ref
-       WHERE dp.cadastre_lotplan IS NOT NULL
+       WHERE daa.cadastre_lotplan IS NOT NULL
          AND ST_DWithin(a.geometry::geography, ref.geom::geography, $2)
        ORDER BY da.application_number, distance_m
        LIMIT 500`,

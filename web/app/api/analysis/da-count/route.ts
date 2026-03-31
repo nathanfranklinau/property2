@@ -1,8 +1,8 @@
 /**
  * GET /api/analysis/da-count?parcel_id=...
  *
- * Returns the count of Gold Coast development applications for a property.
- * Gold Coast only — returns null for other LGAs.
+ * Returns the count of development applications for a property.
+ * Works for all councils with DA data.
  * For COMPLEX lots (BUP/GTP full complex view), counts all DAs across the plan.
  */
 
@@ -20,23 +20,21 @@ export async function GET(req: NextRequest) {
     const result = await db.query<{ da_count: number }>(
       `SELECT COUNT(DISTINCT da.application_number)::int AS da_count
        FROM parcels p
-       JOIN goldcoast_da_properties dp ON (
+       JOIN development_application_addresses daa ON (
          CASE
            WHEN p.cadastre_lot = 'COMPLEX'
-             THEN dp.cadastre_lotplan LIKE '%' || p.cadastre_plan
+             THEN daa.cadastre_lotplan LIKE '%' || p.cadastre_plan
            ELSE
-             dp.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
+             daa.cadastre_lotplan = p.cadastre_lot || p.cadastre_plan
          END
        )
-       JOIN goldcoast_dev_applications da ON da.application_number = dp.application_number
+       JOIN development_applications da ON da.id = daa.application_id
        WHERE p.id = $1
-         AND p.lga_name ILIKE '%gold coast%'
        GROUP BY p.id`,
       [parcelId]
     );
 
     if (result.rows.length === 0) {
-      // Not found or not Gold Coast
       return NextResponse.json(null);
     }
 

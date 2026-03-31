@@ -206,12 +206,12 @@ def main():
     # Fetch all unmatched DA property rows (cadastre_lotplan unresolved) with a location_address
     limit_clause = f"LIMIT {args.limit}" if args.limit else ""
     cur.execute(f"""
-        SELECT da.application_number, dp.lot_on_plan AS lot_plan, dp.location_address,
+        SELECT da.application_number, daa.lot_on_plan AS lot_plan, daa.location_address,
                da.application_type, da.development_category
-        FROM goldcoast_da_properties dp
-        JOIN goldcoast_dev_applications da ON da.application_number = dp.application_number
-        WHERE dp.cadastre_lotplan IS NULL
-          AND dp.location_address IS NOT NULL
+        FROM development_application_addresses daa
+        JOIN development_applications da ON da.id = daa.application_id
+        WHERE daa.cadastre_lotplan IS NULL
+          AND daa.location_address IS NOT NULL
         ORDER BY da.application_number
         {limit_clause}
     """)

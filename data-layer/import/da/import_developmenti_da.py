@@ -62,8 +62,7 @@ class CouncilConfig(TypedDict):
     name: str                   # Human-readable name, e.g. "Ipswich"
     slug: str                   # Short identifier, e.g. "ipswich"
     base_url: str               # Portal base URL (no trailing slash)
-    parent_table: str           # DB table for applications
-    child_table: str            # DB table for properties
+    lga_pid: str                # gnaf_admin_lga.lga_pid for this council
     full_start_date: str        # ISO date string for --full start
     groups: dict                # Application group configs
     filter_panel_selector: str  # CSS selector for the filter panel
@@ -94,8 +93,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "name": "Ipswich",
         "slug": "ipswich",
         "base_url": "https://developmenti.ipswich.qld.gov.au",
-        "parent_table": "ipswich_dev_applications",
-        "child_table": "ipswich_da_properties",
+        "lga_pid": "lgafd22606d6b20",
         "full_start_date": "2018-01-01",
         "groups": _GROUPS_DA_ONLY,
         "filter_panel_selector": "#search-filters",
@@ -112,8 +110,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "name": "Redland",
         "slug": "redland",
         "base_url": "https://developmenti.redland.qld.gov.au",
-        "parent_table": "redland_dev_applications",
-        "child_table": "redland_da_properties",
+        "lga_pid": "lga42379c2c72f3",
         "full_start_date": "2020-01-01",
         "groups": _GROUPS_DA_BA_PLUMB,
         # Redland uses div#filter-container, which is not hidden by default
@@ -130,8 +127,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "name": "Sunshine Coast",
         "slug": "sunshinecoast",
         "base_url": "https://developmenti.sunshinecoast.qld.gov.au",
-        "parent_table": "sunshinecoast_dev_applications",
-        "child_table": "sunshinecoast_da_properties",
+        "lga_pid": "lgaa9ec4359b5d6",
         "full_start_date": "2020-01-01",
         "groups": _GROUPS_DA_BA_PLUMB,
         "filter_panel_selector": "#search-filters",
@@ -148,8 +144,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "name": "Toowoomba",
         "slug": "toowoomba",
         "base_url": "https://developmenti.tr.qld.gov.au",
-        "parent_table": "toowoomba_dev_applications",
-        "child_table": "toowoomba_da_properties",
+        "lga_pid": "lga59db913dcc12",
         "full_start_date": "1998-01-01",
         "groups": _GROUPS_DA_ONLY,
         "filter_panel_selector": "#search-filters",
@@ -167,8 +162,7 @@ COUNCILS: dict[str, CouncilConfig] = {
         "name": "Western Downs",
         "slug": "westerndowns",
         "base_url": "https://developmenti.wdrc.qld.gov.au",
-        "parent_table": "westerndowns_dev_applications",
-        "child_table": "westerndowns_da_properties",
+        "lga_pid": "lga1be86b7b4de2",
         "full_start_date": "2017-01-01",
         "groups": _GROUPS_DA_ONLY,
         # Filter panel is visible by default on WDRC — no force-show needed
@@ -195,8 +189,11 @@ DEFAULT_DELAY = 2.0
 # Module-level delay — overridden by --delay flag
 DELAY = DEFAULT_DELAY
 
-# Development.i milestone stage names → DB column names
+# Development.i milestone stage names → DB column names.
+# Includes both long-form names (Brisbane portal) and short-form names
+# (Development.i portals: Ipswich, Redland, Sunshine Coast, Toowoomba, Western Downs).
 STAGE_COLUMN_MAP = {
+    # Long-form names (Brisbane portal)
     "record creation date": "record_creation_date",
     "commence confirmation period date": "commence_confirmation_date",
     "properly made date": "properly_made_date",
@@ -206,6 +203,13 @@ STAGE_COLUMN_MAP = {
     "final response received date": "final_response_received_date",
     "public notification compliance notice date": "public_notification_date",
     "decision notice date": "decision_notice_date",
+    # Short-form names (Development.i portal stage table)
+    "confirmation period": "commence_confirmation_date",
+    "confirmation notice": "confirmation_notice_sent_date",
+    "action notice": "action_notice_response_date",
+    "information request": "info_request_sent_date",
+    "information response": "final_response_received_date",
+    "decision notice": "decision_notice_date",
 }
 
 
@@ -502,6 +506,7 @@ def extract_detail(page: Page) -> dict:
     out["assessment_officer"] = get_field("Assessment Officer:")
     out["appeal_result"] = get_field("Appeal result:") or get_field("Appeal Result:")
     out["lodgement_date"] = get_date_field("Date Submitted:") or get_date_field("Date Received:")
+    out["public_notification_required"] = get_field("Public Notification Required:")
 
     desc = get_field("Full Description:") or get_field("Description:")
     if desc:
@@ -510,7 +515,15 @@ def extract_detail(page: Page) -> dict:
         if address_part:
             out["location_address"] = address_part
 
-    # Assessment stages table
+    # "Date Decided:" is an explicit field on the detail page — maps to decision_notice_date.
+    date_decided = get_date_field("Date Decided:")
+    if date_decided:
+        out["decision_notice_date"] = date_decided
+
+    # Assessment stages table.
+    # Development.i portals use a 4-column table: Description, Status, Start Date, Date Completed.
+    # We read Date Completed (index 3) as it's the semantically correct date for all milestone
+    # columns. Brisbane portal uses a 3-column table — falls back to index 2.
     stage_rows = page.locator("table.table-bordered tr")
     for i in range(stage_rows.count()):
         row = stage_rows.nth(i)
@@ -521,7 +534,11 @@ def extract_detail(page: Page) -> dict:
         col_name = STAGE_COLUMN_MAP.get(stage_name)
         if not col_name:
             continue
-        date_text = cells.nth(2).text_content().strip()
+        if cells.count() >= 4:
+            # 4-column table: prefer Date Completed; fall back to Start Date
+            date_text = cells.nth(3).text_content().strip() or cells.nth(2).text_content().strip()
+        else:
+            date_text = cells.nth(2).text_content().strip()
         d = _parse_rendered_date(date_text)
         if d:
             out[col_name] = d
@@ -582,30 +599,32 @@ def upsert_summary(conn, cfg: CouncilConfig, records: list[dict]) -> int:
     if not records:
         return 0
 
-    table = cfg["parent_table"]
-    sql = f"""
-        INSERT INTO {table}
-            (application_number, description, application_type, application_group,
+    lga_pid = cfg["lga_pid"]
+    sql = """
+        INSERT INTO development_applications
+            (lga_pid, state, source_system,
+             application_number, description, application_type, application_group,
              lodgement_date, status, suburb, location_address,
              monitoring_status, last_scraped_at)
         VALUES
-            (%(application_number)s, %(description)s, %(application_type)s,
+            (%(lga_pid)s, 'QLD', 'developmenti',
+             %(application_number)s, %(description)s, %(application_type)s,
              %(application_group)s, %(lodgement_date)s, %(status)s,
              %(suburb)s, %(location_address)s,
              %(monitoring_status)s, NOW())
-        ON CONFLICT (application_number) DO UPDATE SET
-            description      = COALESCE(EXCLUDED.description, {table}.description),
-            application_type = COALESCE(EXCLUDED.application_type, {table}.application_type),
-            application_group = COALESCE(EXCLUDED.application_group, {table}.application_group),
-            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, {table}.lodgement_date),
+        ON CONFLICT (lga_pid, application_number) DO UPDATE SET
+            description      = COALESCE(EXCLUDED.description, development_applications.description),
+            application_type = COALESCE(EXCLUDED.application_type, development_applications.application_type),
+            application_group = COALESCE(EXCLUDED.application_group, development_applications.application_group),
+            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, development_applications.lodgement_date),
             status           = EXCLUDED.status,
-            suburb           = COALESCE(EXCLUDED.suburb, {table}.suburb),
-            location_address = COALESCE(EXCLUDED.location_address, {table}.location_address),
+            suburb           = COALESCE(EXCLUDED.suburb, development_applications.suburb),
+            location_address = COALESCE(EXCLUDED.location_address, development_applications.location_address),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
-                WHEN {table}.status IS DISTINCT FROM EXCLUDED.status
+                WHEN development_applications.status IS DISTINCT FROM EXCLUDED.status
                 THEN NOW()
-                ELSE {table}.status_changed_at
+                ELSE development_applications.status_changed_at
             END,
             last_scraped_at  = NOW()
     """
@@ -615,6 +634,7 @@ def upsert_summary(conn, cfg: CouncilConfig, records: list[dict]) -> int:
     for rec in records:
         if not rec or not rec.get("application_number"):
             continue
+        rec["lga_pid"] = lga_pid
         cur.execute(sql, rec)
         count += 1
         if count % BATCH_SIZE == 0:
@@ -627,16 +647,16 @@ def upsert_summary(conn, cfg: CouncilConfig, records: list[dict]) -> int:
 
 def upsert_detail(conn, cfg: CouncilConfig, application_number: str, detail: dict) -> None:
     """Update a single row with detail-page data."""
-    table = cfg["parent_table"]
+    lga_pid = cfg["lga_pid"]
     sets = ["detail_scraped_at = NOW()", "last_scraped_at = NOW()"]
-    params: dict = {"app_num": application_number}
+    params: dict = {"app_num": application_number, "lga_pid": lga_pid}
 
     detail_columns = [
         "description", "application_type",
         "status", "decision", "suburb", "location_address",
         "assessment_level", "use_categories",
         "applicant", "consultant", "assessment_officer", "appeal_result",
-        "lodgement_date",
+        "lodgement_date", "public_notification_required",
         # Milestones
         "record_creation_date", "commence_confirmation_date",
         "properly_made_date", "action_notice_response_date",
@@ -659,16 +679,16 @@ def upsert_detail(conn, cfg: CouncilConfig, application_number: str, detail: dic
         sets.append("monitoring_status = %(monitoring_status)s")
         params["monitoring_status"] = monitoring_status_for(params.get("status"))
         sets.append(
-            f"status_changed_at = CASE "
-            f"WHEN {table}.status IS DISTINCT FROM %(status)s "
-            f"THEN NOW() "
-            f"ELSE {table}.status_changed_at END"
+            "status_changed_at = CASE "
+            "WHEN development_applications.status IS DISTINCT FROM %(status)s "
+            "THEN NOW() "
+            "ELSE development_applications.status_changed_at END"
         )
 
     sql = f"""
-        UPDATE {table}
+        UPDATE development_applications
         SET {', '.join(sets)}
-        WHERE application_number = %(app_num)s
+        WHERE lga_pid = %(lga_pid)s AND application_number = %(app_num)s
     """
     cur = conn.cursor()
     cur.execute(sql, params)
@@ -688,11 +708,24 @@ def upsert_da_properties(
     if not properties:
         return None, None
 
-    child_table = cfg["child_table"]
+    lga_pid = cfg["lga_pid"]
     cur = conn.cursor()
+
+    # Resolve application_id from unified table
     cur.execute(
-        f"DELETE FROM {child_table} WHERE application_number = %s",
-        (application_number,),
+        "SELECT id FROM development_applications WHERE lga_pid = %s AND application_number = %s",
+        (lga_pid, application_number),
+    )
+    row = cur.fetchone()
+    if not row:
+        log.warning(f"  No parent row for {application_number} — skipping properties")
+        cur.close()
+        return None, None
+    application_id = row[0]
+
+    cur.execute(
+        "DELETE FROM development_application_addresses WHERE application_id = %s",
+        (application_id,),
     )
 
     primary_cadastre = None
@@ -723,16 +756,16 @@ def upsert_da_properties(
         parsed = parse_location_address(address_raw)
 
         cur.execute(
-            f"""
-            INSERT INTO {child_table}
-                (application_number, land_number, lot_on_plan, suburb,
+            """
+            INSERT INTO development_application_addresses
+                (application_id, land_number, lot_on_plan, suburb,
                  location_address, cadastre_lotplan, is_primary,
                  cadastre_suburb, street_number, street_name, street_type,
                  unit_type, unit_number, unit_suffix)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                application_number,
+                application_id,
                 land_number,
                 lot_on_plan,
                 parsed["suburb"],
@@ -1017,15 +1050,15 @@ def _enrich_chunk(worker_id: int, rows: list, cfg: CouncilConfig, args) -> None:
 
 def run_enrich(conn, cfg: CouncilConfig, args) -> None:
     """Fetch unenriched rows then dispatch to N parallel worker sessions."""
-    table = cfg["parent_table"]
+    lga_pid = cfg["lga_pid"]
     cur = conn.cursor()
 
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
-            f"SELECT application_number, application_type FROM {table} "
-            f"WHERE application_number = %s",
-            (target_app,),
+            "SELECT application_number, application_type FROM development_applications "
+            "WHERE lga_pid = %s AND application_number = %s",
+            (lga_pid, target_app),
         )
         row = cur.fetchone()
         cur.close()
@@ -1035,20 +1068,20 @@ def run_enrich(conn, cfg: CouncilConfig, args) -> None:
         _enrich_chunk(0, [row], cfg, args)
         return
 
-    conditions = ["detail_scraped_at IS NULL"]
+    conditions = ["detail_scraped_at IS NULL", "lga_pid = %s"]
     if not getattr(args, "include_closed", False):
         conditions.append("monitoring_status = 'active'")
 
     sql = f"""
         SELECT application_number, application_type
-        FROM {table}
+        FROM development_applications
         WHERE {' AND '.join(conditions)}
         ORDER BY lodgement_date DESC NULLS LAST
     """
     if args.limit:
         sql += f" LIMIT {int(args.limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (lga_pid,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 
@@ -1078,18 +1111,18 @@ def run_enrich(conn, cfg: CouncilConfig, args) -> None:
 
 def run_monitor(conn, cfg: CouncilConfig, args) -> None:
     """Re-check active applications for status/detail changes."""
-    table = cfg["parent_table"]
+    lga_pid = cfg["lga_pid"]
     cur = conn.cursor()
-    sql = f"""
+    sql = """
         SELECT application_number, application_type
-        FROM {table}
-        WHERE monitoring_status = 'active'
+        FROM development_applications
+        WHERE lga_pid = %s AND monitoring_status = 'active'
         ORDER BY last_scraped_at ASC NULLS FIRST
     """
     if args.limit:
         sql += f" LIMIT {int(args.limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (lga_pid,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 

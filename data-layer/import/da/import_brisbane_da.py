@@ -86,6 +86,8 @@ DEFAULT_DELAY = 2.0
 
 DELAY = DEFAULT_DELAY
 
+BRISBANE_LGA_PID = "lgaf711db11e308"
+
 # Application groups → filter values on the portal
 GROUPS = {
     "development": {"label": "Development", "include_da": True, "include_ba": False},
@@ -465,28 +467,30 @@ def upsert_summary(conn, records: list) -> int:
         return 0
 
     sql = """
-        INSERT INTO brisbane_dev_applications
-            (application_number, description, application_type, application_group,
+        INSERT INTO development_applications
+            (lga_pid, state, source_system,
+             application_number, description, application_type, application_group,
              lodgement_date, status, suburb, location_address,
              monitoring_status, last_scraped_at)
         VALUES
-            (%(application_number)s, %(description)s, %(application_type)s,
+            (%(lga_pid)s, 'QLD', 'developmenti',
+             %(application_number)s, %(description)s, %(application_type)s,
              %(application_group)s, %(lodgement_date)s, %(status)s,
              %(suburb)s, %(location_address)s,
              %(monitoring_status)s, NOW())
-        ON CONFLICT (application_number) DO UPDATE SET
-            description      = COALESCE(EXCLUDED.description, brisbane_dev_applications.description),
-            application_type = COALESCE(EXCLUDED.application_type, brisbane_dev_applications.application_type),
-            application_group = COALESCE(EXCLUDED.application_group, brisbane_dev_applications.application_group),
-            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, brisbane_dev_applications.lodgement_date),
+        ON CONFLICT (lga_pid, application_number) DO UPDATE SET
+            description      = COALESCE(EXCLUDED.description, development_applications.description),
+            application_type = COALESCE(EXCLUDED.application_type, development_applications.application_type),
+            application_group = COALESCE(EXCLUDED.application_group, development_applications.application_group),
+            lodgement_date   = COALESCE(EXCLUDED.lodgement_date, development_applications.lodgement_date),
             status           = EXCLUDED.status,
-            suburb           = COALESCE(EXCLUDED.suburb, brisbane_dev_applications.suburb),
-            location_address = COALESCE(EXCLUDED.location_address, brisbane_dev_applications.location_address),
+            suburb           = COALESCE(EXCLUDED.suburb, development_applications.suburb),
+            location_address = COALESCE(EXCLUDED.location_address, development_applications.location_address),
             monitoring_status = EXCLUDED.monitoring_status,
             status_changed_at = CASE
-                WHEN brisbane_dev_applications.status IS DISTINCT FROM EXCLUDED.status
+                WHEN development_applications.status IS DISTINCT FROM EXCLUDED.status
                 THEN NOW()
-                ELSE brisbane_dev_applications.status_changed_at
+                ELSE development_applications.status_changed_at
             END,
             last_scraped_at  = NOW()
     """
@@ -496,6 +500,7 @@ def upsert_summary(conn, records: list) -> int:
     for rec in records:
         if not rec or not rec.get("application_number"):
             continue
+        rec["lga_pid"] = BRISBANE_LGA_PID
         cur.execute(sql, rec)
         count += 1
         if count % BATCH_SIZE == 0:
@@ -509,7 +514,7 @@ def upsert_summary(conn, records: list) -> int:
 def upsert_detail(conn, application_number: str, detail: dict) -> None:
     """Update a single row with detail-page data."""
     sets = ["detail_scraped_at = NOW()", "last_scraped_at = NOW()"]
-    params = {"app_num": application_number}
+    params = {"app_num": application_number, "lga_pid": BRISBANE_LGA_PID}
 
     detail_columns = [
         "description", "application_type",
@@ -541,15 +546,15 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
         params["monitoring_status"] = monitoring_status_for(params.get("status"))
         sets.append(
             "status_changed_at = CASE "
-            "WHEN brisbane_dev_applications.status IS DISTINCT FROM %(status)s "
+            "WHEN development_applications.status IS DISTINCT FROM %(status)s "
             "THEN NOW() "
-            "ELSE brisbane_dev_applications.status_changed_at END"
+            "ELSE development_applications.status_changed_at END"
         )
 
     sql = f"""
-        UPDATE brisbane_dev_applications
+        UPDATE development_applications
         SET {', '.join(sets)}
-        WHERE application_number = %(app_num)s
+        WHERE lga_pid = %(lga_pid)s AND application_number = %(app_num)s
     """
     cur = conn.cursor()
     cur.execute(sql, params)
@@ -557,7 +562,7 @@ def upsert_detail(conn, application_number: str, detail: dict) -> None:
 
 
 def upsert_da_properties(conn, application_number: str, properties: list) -> tuple:
-    """Upsert property rows into brisbane_da_properties.
+    """Upsert property rows into development_application_addresses.
 
     Returns (primary_cadastre_lotplan, primary_suburb).
     """
@@ -565,9 +570,22 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
         return None, None
 
     cur = conn.cursor()
+
+    # Resolve application_id from unified table
     cur.execute(
-        "DELETE FROM brisbane_da_properties WHERE application_number = %s",
-        (application_number,),
+        "SELECT id FROM development_applications WHERE lga_pid = %s AND application_number = %s",
+        (BRISBANE_LGA_PID, application_number),
+    )
+    row = cur.fetchone()
+    if not row:
+        log.warning(f"  No parent row for {application_number} — skipping properties")
+        cur.close()
+        return None, None
+    application_id = row[0]
+
+    cur.execute(
+        "DELETE FROM development_application_addresses WHERE application_id = %s",
+        (application_id,),
     )
 
     primary_cadastre = None
@@ -603,15 +621,15 @@ def upsert_da_properties(conn, application_number: str, properties: list) -> tup
 
         cur.execute(
             """
-            INSERT INTO brisbane_da_properties
-                (application_number, land_number, lot_on_plan, suburb,
+            INSERT INTO development_application_addresses
+                (application_id, land_number, lot_on_plan, suburb,
                  location_address, cadastre_lotplan, is_primary,
                  cadastre_suburb, street_number, street_name, street_type,
                  unit_type, unit_number, unit_suffix, postcode)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                application_number,
+                application_id,
                 land_number,
                 lot_on_plan,
                 parsed["suburb"],
@@ -812,9 +830,9 @@ def run_enrich(conn, args) -> None:
     target_app = getattr(args, "app", None)
     if target_app:
         cur.execute(
-            "SELECT application_number, application_type FROM brisbane_dev_applications "
-            "WHERE application_number = %s",
-            (target_app,),
+            "SELECT application_number, application_type FROM development_applications "
+            "WHERE lga_pid = %s AND application_number = %s",
+            (BRISBANE_LGA_PID, target_app),
         )
         row = cur.fetchone()
         cur.close()
@@ -824,20 +842,20 @@ def run_enrich(conn, args) -> None:
         _enrich_chunk(0, [row], args)
         return
 
-    conditions = ["detail_scraped_at IS NULL"]
+    conditions = ["detail_scraped_at IS NULL", "lga_pid = %s"]
     if not getattr(args, "include_closed", False):
         conditions.append("monitoring_status = 'active'")
 
     sql = f"""
         SELECT application_number, application_type
-        FROM brisbane_dev_applications
+        FROM development_applications
         WHERE {' AND '.join(conditions)}
         ORDER BY lodgement_date DESC NULLS LAST
     """
     if args.limit:
         sql += f" LIMIT {int(args.limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (BRISBANE_LGA_PID,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 
@@ -872,14 +890,14 @@ def run_monitor(conn, args) -> None:
     cur = conn.cursor()
     sql = """
         SELECT application_number, application_type
-        FROM brisbane_dev_applications
-        WHERE monitoring_status = 'active'
+        FROM development_applications
+        WHERE lga_pid = %s AND monitoring_status = 'active'
         ORDER BY last_scraped_at ASC NULLS FIRST
     """
     if args.limit:
         sql += f" LIMIT {int(args.limit)}"
 
-    cur.execute(sql)
+    cur.execute(sql, (BRISBANE_LGA_PID,))
     rows = [(r[0], r[1]) for r in cur.fetchall()]
     cur.close()
 
@@ -907,8 +925,8 @@ def run_monitor(conn, args) -> None:
                     # Check if now terminal
                     cur2 = conn.cursor()
                     cur2.execute(
-                        "SELECT status FROM brisbane_dev_applications WHERE application_number = %s",
-                        (app_num,),
+                        "SELECT status FROM development_applications WHERE lga_pid = %s AND application_number = %s",
+                        (BRISBANE_LGA_PID, app_num,),
                     )
                     row = cur2.fetchone()
                     cur2.close()
