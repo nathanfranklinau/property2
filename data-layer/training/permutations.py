@@ -1001,16 +1001,30 @@ def perm_corner(
     x_full = " ".join(p for p in [x_name, x_type] if p)
     x_short = " ".join(p for p in [x_name, x_abbrev] if p)
 
-    # Corner formats use the abbreviated street type; principal labels are canonical.
-    fvals = {**_canonical_fields(rec), "street_type": p_abbrev_tc or p_type or ""}
+    # fvals includes both principal and cross-street fields so the IOB aligner
+    # labels tokens for both streets. cross_street_name is guaranteed different
+    # from street_name (enforced by the load_corner_aliases query).
+    fvals = {
+        **_canonical_fields(rec),
+        "street_type": p_abbrev_tc or p_type or "",
+        "cross_street_number": str(x_num) if x_num else "",
+        "cross_street_name": x_name,
+        "cross_street_type": x_abbrev or x_type or "",
+    }
+    fvals_full = {
+        **_canonical_fields(rec),
+        "street_type": p_type or "",
+        "cross_street_number": str(x_num) if x_num else "",
+        "cross_street_name": x_name,
+        "cross_street_type": x_type or "",
+    }
     results: list[tuple[str, str, dict[str, str]]] = []
 
     # --- No numbers (classic Cnr format) ---
     # "Cnr Hooker St & Hutchins St, Yarralumla ACT 2600"
     results.append((_assemble([f"Cnr {p_short} & {x_short}", locality]), "corner", fvals))
     # "Corner Hooker Street And Hutchins Street, Yarralumla ACT 2600"
-    results.append((_assemble([f"Corner {p_full} And {x_full}", locality]), "corner",
-                     {**_canonical_fields(rec), "street_type": p_type or ""}))
+    results.append((_assemble([f"Corner {p_full} And {x_full}", locality]), "corner", fvals_full))
     # "Cnr Hooker St/Hutchins St, Yarralumla ACT 2600"
     results.append((_assemble([f"Cnr {p_short}/{x_short}", locality]), "corner", fvals))
 
@@ -1023,8 +1037,18 @@ def perm_corner(
         # "Cnr 14 Hooker St & 43 Hutchins St, Yarralumla ACT 2600"
         results.append((_assemble([f"Cnr {p_num} {p_short} & {x_num} {x_short}", locality]), "corner_both_numbers", fvals))
         # "14 Hooker Street, Cnr Hutchins Street, Yarralumla ACT 2600"
-        results.append((_assemble([f"{p_num} {p_full}", f"Cnr {x_full}", locality]), "corner_both_numbers",
-                         {**_canonical_fields(rec), "street_type": p_type or ""}))
+        results.append((_assemble([f"{p_num} {p_full}", f"Cnr {x_full}", locality]), "corner_both_numbers", fvals_full))
+
+    # --- Reversed variants: cross-street listed first ---
+    # The aligner finds field values by string match, not position, so the same
+    # fvals labels both streets correctly regardless of which appears first.
+    results.append((_assemble([f"Cnr {x_short} & {p_short}", locality]), "corner_reversed", fvals))
+    results.append((_assemble([f"Cnr {x_short}/{p_short}", locality]), "corner_reversed", fvals))
+    results.append((_assemble([f"Corner {x_full} And {p_full}", locality]), "corner_reversed", fvals_full))
+
+    if x_num:
+        results.append((_assemble([f"{x_num} {x_short} & {p_num} {p_short}", locality]), "corner_both_numbers_reversed", fvals))
+        results.append((_assemble([f"Cnr {x_num} {x_short} & {p_num} {p_short}", locality]), "corner_both_numbers_reversed", fvals))
 
     return results
 

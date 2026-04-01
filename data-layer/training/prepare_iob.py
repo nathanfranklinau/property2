@@ -53,6 +53,9 @@ FIELD_ORDER = [
     "street_name",
     "street_type",
     "street_suffix",
+    "cross_street_number",   # corner block: alternate-street house number
+    "cross_street_name",     # corner block: alternate-street name
+    "cross_street_type",     # corner block: alternate-street type
     "suburb",
     "state",
     "postcode",

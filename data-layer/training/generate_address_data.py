@@ -692,6 +692,7 @@ TEST_COMPARE_FIELDS: list[str] = [
     "lot_number",
     "street_number", "street_number_last",
     "street_name", "street_type", "street_suffix",
+    "cross_street_number", "cross_street_name", "cross_street_type",
     "suburb", "state", "postcode",
 ]
 
