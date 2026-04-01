@@ -217,9 +217,17 @@ def main() -> None:
 
     # ── Train ─────────────────────────────────────────────────────────────────
 
+    # Resume from the latest checkpoint if one exists (e.g. after a crash)
+    last_checkpoint = None
+    output_path = Path(output_dir)
+    checkpoints = sorted(output_path.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
+    if checkpoints:
+        last_checkpoint = str(checkpoints[-1])
+        log.info(f"Resuming from checkpoint: {last_checkpoint}")
+
     log.info("Starting training...")
     try:
-        trainer.train()
+        trainer.train(resume_from_checkpoint=last_checkpoint)
     except KeyboardInterrupt:
         log.info("Training interrupted — loading best checkpoint before saving.")
         if trainer.state.best_model_checkpoint:
