@@ -87,7 +87,7 @@ def main() -> None:
         default=DEFAULT_OUTPUT,
         help="Directory to save the trained model and tokenizer",
     )
-    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -180,7 +180,7 @@ def main() -> None:
         compute_metrics=_make_compute_metrics(label_names),
         callbacks=[
             EarlyStoppingCallback(
-                early_stopping_patience=2,
+                early_stopping_patience=5,
                 early_stopping_threshold=0.0,
             )
         ],
