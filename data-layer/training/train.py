@@ -17,6 +17,7 @@ Typical runtime on RTX 3060 (12 GB): ~1–2 hours for 600k IOB examples, 1 epoch
 import argparse
 import json
 import logging
+import signal
 from pathlib import Path
 
 import numpy as np
@@ -27,12 +28,39 @@ from transformers import (
     DataCollatorForTokenClassification,
     EarlyStoppingCallback,
     Trainer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
     TrainingArguments,
 )
 
 log = logging.getLogger(__name__)
 
 TOKENIZER_NAME = "distilbert-base-uncased"
+
+# ── Graceful stop (Ctrl+C) ─────────────────────────────────────────────────────
+
+_stop_requested = False
+
+
+def _handle_sigint(signum, frame) -> None:
+    global _stop_requested
+    _stop_requested = True
+    print("\n[Training] Ctrl+C received — stopping after this step and saving best model.")
+
+
+signal.signal(signal.SIGINT, _handle_sigint)
+
+
+class GracefulStopCallback(TrainerCallback):
+    """Checks the _stop_requested flag each step and triggers a clean stop."""
+
+    def on_step_end(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs
+    ) -> TrainerControl:
+        if _stop_requested:
+            control.should_training_stop = True
+        return control
 DEFAULT_DATASET = "training/data/iob_dataset"
 DEFAULT_OUTPUT = "training/model"
 
@@ -182,14 +210,20 @@ def main() -> None:
             EarlyStoppingCallback(
                 early_stopping_patience=5,
                 early_stopping_threshold=0.0,
-            )
+            ),
+            GracefulStopCallback(),
         ],
     )
 
     # ── Train ─────────────────────────────────────────────────────────────────
 
     log.info("Starting training...")
-    trainer.train()
+    try:
+        trainer.train()
+    except KeyboardInterrupt:
+        log.info("Training interrupted — loading best checkpoint before saving.")
+        if trainer.state.best_model_checkpoint:
+            trainer._load_best_model()
 
     # ── Save ──────────────────────────────────────────────────────────────────
 
