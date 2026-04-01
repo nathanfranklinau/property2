@@ -14,6 +14,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Sequence
 
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
@@ -21,6 +22,74 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer
 log = logging.getLogger(__name__)
 
 MAX_LENGTH = 128
+
+# Unit type keywords that can appear fused with their number (e.g. "Unit59", "Shop301").
+# Title-cased. Order matters — longer matches checked first to avoid "Flat" matching inside
+# "Flatette" etc. Listed longest-first within each logical group.
+_UNIT_TYPE_KEYWORDS: Sequence[str] = [
+    "Apartment", "Townhouse", "Penthouse", "Warehouse", "Basement",
+    "Factory", "Studio", "Office", "Duplex", "Villa", "Room",
+    "Shop", "Flat", "Unit", "Suite", "Shed",
+]
+
+# Level type keywords that can appear fused (e.g. "Level3", "Floor2").
+_LEVEL_TYPE_KEYWORDS: Sequence[str] = [
+    "Mezzanine", "Basement", "Rooftop", "Parking", "Podium",
+    "Ground", "Floor", "Level",
+]
+
+# Pre-compiled regex patterns: (field, type_value, pattern)
+# Each pattern matches the full fused value and captures (type_part, number_part).
+_UNIT_FUSED_RE: list[tuple[str, re.Pattern[str]]] = [
+    (kw, re.compile(rf"^({re.escape(kw)})(\w+)$", re.IGNORECASE))
+    for kw in _UNIT_TYPE_KEYWORDS
+]
+_LEVEL_FUSED_RE: list[tuple[str, re.Pattern[str]]] = [
+    (kw, re.compile(rf"^({re.escape(kw)})(\w+)$", re.IGNORECASE))
+    for kw in _LEVEL_TYPE_KEYWORDS
+]
+_LOT_FUSED_RE = re.compile(r"^Lot(\w+)$", re.IGNORECASE)
+
+
+def split_fused_tokens(result: dict[str, str | None]) -> dict[str, str | None]:
+    """Split fused type+number tokens produced by the nospace permutation patterns.
+
+    When the model sees "Unit59" as a single token it labels the whole thing as
+    unit_number (unit_type is absent). This function detects those fused values
+    and restores the canonical split: unit_type="Unit", unit_number="59".
+
+    Safe to call on any parse result — values that are already split are unchanged.
+    """
+    result = dict(result)
+
+    # unit_number fused: "Unit59" → unit_type="Unit", unit_number="59"
+    unit_num = result.get("unit_number") or ""
+    if unit_num and not result.get("unit_type"):
+        for kw, pattern in _UNIT_FUSED_RE:
+            m = pattern.match(unit_num)
+            if m:
+                result["unit_type"] = kw
+                result["unit_number"] = m.group(2)
+                break
+
+    # level_number fused: "Level3" → level_type="Level", level_number="3"
+    level_num = result.get("level_number") or ""
+    if level_num and not result.get("level_type"):
+        for kw, pattern in _LEVEL_FUSED_RE:
+            m = pattern.match(level_num)
+            if m:
+                result["level_type"] = kw
+                result["level_number"] = m.group(2)
+                break
+
+    # lot_number fused: "Lot163" → lot_number="163"
+    lot_num = result.get("lot_number") or ""
+    if lot_num:
+        m = _LOT_FUSED_RE.match(lot_num)
+        if m:
+            result["lot_number"] = m.group(1)
+
+    return result
 
 
 class AddressParser:
@@ -163,4 +232,6 @@ class AddressParser:
         # can never be misclassified as BUILDING_NAME.
         result.pop("lot_keyword", None)
 
-        return result
+        # Split any fused type+number tokens produced by nospace input patterns
+        # (e.g. "Unit59" → unit_type="Unit", unit_number="59").
+        return split_fused_tokens(result)
