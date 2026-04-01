@@ -940,6 +940,8 @@ def run_test_mode(
     parser, compare output to the expected field_values dict. Writes a CSV
     with one row per permutation and renders a live ANSI dashboard while running.
     """
+    from service.address_parser import split_fused_tokens  # lazy — torch not always installed
+
     output_path = args.output
     if dirpart := os.path.dirname(output_path):
         os.makedirs(dirpart, exist_ok=True)
@@ -1050,7 +1052,7 @@ def main() -> None:
         model_dir = os.getenv("ADDRESS_MODEL_DIR", "training/model")
         try:
             # Lazy import — torch/transformers not always installed in this venv
-            from service.address_parser import AddressParser, split_fused_tokens
+            from service.address_parser import AddressParser
         except ImportError as exc:
             conn.close()
             sys.exit(f"--test requires torch and transformers to be installed: {exc}")
