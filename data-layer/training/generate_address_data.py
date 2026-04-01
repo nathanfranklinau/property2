@@ -22,7 +22,10 @@ import json
 import logging
 import os
 import random
+import re
 import sys
+import time
+from collections import defaultdict, deque
 from typing import Iterator
 
 import psycopg2
@@ -658,6 +661,326 @@ class ParquetWriter:
 
 
 # ---------------------------------------------------------------------------
+# Test mode — evaluate trained model against generated permutations
+# ---------------------------------------------------------------------------
+
+_ANSI_STRIP = re.compile(r"\033\[[0-9;]*m")
+
+# ANSI colour / cursor helpers
+_A_BOLD     = "\033[1m"
+_A_DIM      = "\033[2m"
+_A_GREEN    = "\033[32m"
+_A_RED      = "\033[31m"
+_A_YELLOW   = "\033[33m"
+_A_CYAN     = "\033[36m"
+_A_RESET    = "\033[0m"
+_A_HIDE_CUR = "\033[?25l"
+_A_SHOW_CUR = "\033[?25h"
+
+# Fields compared between model output and permutation field_values.
+# lot_keyword excluded — it is a display-only training label, not a model output field.
+TEST_COMPARE_FIELDS: list[str] = [
+    "building_name",
+    "unit_type", "unit_number",
+    "level_type", "level_number",
+    "lot_number",
+    "street_number", "street_number_last",
+    "street_name", "street_type", "street_suffix",
+    "suburb", "state", "postcode",
+]
+
+TEST_CSV_COLUMNS: list[str] = (
+    ["formatted_address", "permutation_type", "overall_pass", "failed_fields"]
+    + [f"expected_{f}" for f in TEST_COMPARE_FIELDS]
+    + [f"got_{f}" for f in TEST_COMPARE_FIELDS]
+)
+
+_DASH_W  = 78           # total dashboard width including borders
+_DASH_IW = _DASH_W - 2  # inner width between ║ characters
+
+
+def _vlen(s: str) -> int:
+    """Visible string length — strips ANSI escape codes before measuring."""
+    return len(_ANSI_STRIP.sub("", s))
+
+
+def _rpad(s: str, width: int) -> str:
+    """Right-pad s so its visible length equals width."""
+    return s + " " * max(0, width - _vlen(s))
+
+
+def _bar(frac: float, w: int = 16) -> str:
+    n = round(max(0.0, min(1.0, frac)) * w)
+    return "█" * n + "░" * (w - n)
+
+
+def _pct(n: int, d: int) -> str:
+    return f"{100 * n / d:5.1f}%" if d else "     —"
+
+
+def compare_address(
+    expected: dict[str, str],
+    got: dict[str, str | None],
+) -> tuple[bool, list[str], dict[str, bool]]:
+    """Compare model output against the expected field_values from a permutation.
+
+    An empty string in expected means the field should be absent from the output.
+
+    Returns:
+        (overall_pass, list_of_failed_field_names, per_field_pass_dict)
+    """
+    field_results: dict[str, bool] = {}
+    for field in TEST_COMPARE_FIELDS:
+        exp    = (expected.get(field) or "").strip().lower()
+        actual = (got.get(field) or "").strip().lower()
+        field_results[field] = exp == actual
+    failed = [f for f, ok in field_results.items() if not ok]
+    return not failed, failed, field_results
+
+
+class LiveDashboard:
+    """ANSI-rewriting terminal dashboard for real-time test progress.
+
+    Overwrites its own output on every refresh — no external libraries needed.
+    Refresh rate is governed by _UPDATE_EVERY so terminal I/O never bottlenecks
+    the parser loop.
+    """
+
+    _MAX_FAILURES = 6   # recent-failures ring buffer depth
+    _UPDATE_EVERY = 3   # re-render every N permutations
+
+    def __init__(self, total_perms_hint: int | None = None) -> None:
+        self.total_perms  = 0
+        self.pass_count   = 0
+        self.fail_count   = 0
+        self.source_count = 0
+        # Per-field stats (only for perms where the field is expected non-empty)
+        self.field_total: dict[str, int] = defaultdict(int)
+        self.field_pass:  dict[str, int] = defaultdict(int)
+        # False positives: model predicted a value but expected was empty
+        self.field_fp: dict[str, int] = defaultdict(int)
+        self.recent_failures: deque[tuple] = deque(maxlen=self._MAX_FAILURES)
+        self._start    = time.monotonic()
+        self._rendered = 0   # number of lines written in last render pass
+        self._hint     = total_perms_hint
+        sys.stdout.write(_A_HIDE_CUR)
+        sys.stdout.flush()
+
+    def record(
+        self,
+        formatted: str,
+        ptype: str,
+        passed: bool,
+        failed_fields: list[str],
+        field_results: dict[str, bool],
+        expected: dict[str, str],
+        got: dict[str, str | None],
+    ) -> None:
+        self.total_perms += 1
+        if passed:
+            self.pass_count += 1
+        else:
+            self.fail_count += 1
+            self.recent_failures.append(
+                (formatted, ptype, failed_fields, dict(expected), dict(got))
+            )
+
+        for f in TEST_COMPARE_FIELDS:
+            exp_v = (expected.get(f) or "").strip()
+            got_v = (got.get(f) or "").strip()
+            if exp_v:
+                self.field_total[f] += 1
+                if field_results[f]:
+                    self.field_pass[f] += 1
+            elif got_v:
+                # Model hallucinated a value that wasn't in the address
+                self.field_fp[f] += 1
+
+        if self.total_perms % self._UPDATE_EVERY == 0:
+            self._render()
+
+    def new_source(self) -> None:
+        self.source_count += 1
+
+    # ── rendering ──────────────────────────────────────────────────────────
+
+    def _row(self, content: str) -> str:
+        return "║" + _rpad(content, _DASH_IW) + "║"
+
+    def _hr(self) -> str:
+        return "╠" + "═" * _DASH_IW + "╣"
+
+    def _render(self) -> None:  # noqa: C901
+        elapsed   = time.monotonic() - self._start
+        speed     = self.total_perms / elapsed if elapsed > 0 else 0.0
+        pass_rate = self.pass_count / self.total_perms if self.total_perms else 0.0
+
+        rows: list[str] = []
+
+        # ── header ────────────────────────────────────────────────────────
+        ts = time.strftime("%H:%M:%S")
+        rows.append("╔" + "═" * _DASH_IW + "╗")
+        rows.append(self._row(
+            f"  {_A_BOLD}{_A_CYAN}ADDRESS PARSER TEST{_A_RESET}  —  {ts}"
+        ))
+        rows.append(self._hr())
+
+        # ── progress / speed ──────────────────────────────────────────────
+        eta = ""
+        if self._hint and speed > 0:
+            rem = max(0, (self._hint - self.total_perms) / speed)
+            eta = f"  ·  ETA {rem:.0f}s"
+        rows.append(self._row(
+            f"  Perms  {self.total_perms:,} tested"
+            f"  ({self.source_count} src)  ·  {speed:,.0f}/s{eta}"
+        ))
+
+        # ── pass/fail bar ─────────────────────────────────────────────────
+        pr_c = (
+            _A_GREEN  if pass_rate >= 0.99 else
+            _A_YELLOW if pass_rate >= 0.95 else
+            _A_RED
+        )
+        rows.append(self._row(
+            f"  Result  {pr_c}[{_bar(pass_rate)}]{_A_RESET}  {pass_rate * 100:5.1f}%"
+            f"  {_A_GREEN}✓ {self.pass_count:,}{_A_RESET}"
+            f"  {_A_RED}✗ {self.fail_count:,}{_A_RESET}"
+        ))
+        rows.append(self._hr())
+
+        # ── field accuracy ────────────────────────────────────────────────
+        rows.append(self._row(f"  {_A_BOLD}FIELD ACCURACY{_A_RESET}"))
+        active = [
+            f for f in TEST_COMPARE_FIELDS
+            if self.field_total.get(f, 0) or self.field_fp.get(f, 0)
+        ]
+        if not active:
+            rows.append(self._row(f"  {_A_DIM}(waiting for data…){_A_RESET}"))
+        else:
+            for f in active:
+                total = self.field_total.get(f, 0)
+                ok    = self.field_pass.get(f, 0)
+                fp    = self.field_fp.get(f, 0)
+                fp_s  = f"  {_A_RED}fp:{fp}{_A_RESET}" if fp else ""
+                if total:
+                    frac = ok / total
+                    bc   = (
+                        _A_GREEN  if frac >= 0.99 else
+                        _A_YELLOW if frac >= 0.95 else
+                        _A_RED
+                    )
+                    rows.append(self._row(
+                        f"  {f:<18}  {bc}[{_bar(frac)}]{_A_RESET}"
+                        f"  {_pct(ok, total)}  {ok:>5}/{total:<5}{fp_s}"
+                    ))
+                else:
+                    rows.append(self._row(
+                        f"  {f:<18}  {'─' * 16}  (fp only){fp_s}"
+                    ))
+        rows.append(self._hr())
+
+        # ── recent failures ───────────────────────────────────────────────
+        rows.append(self._row(f"  {_A_BOLD}RECENT FAILURES{_A_RESET}"))
+        if not self.recent_failures:
+            rows.append(self._row(f"  {_A_DIM}(none yet){_A_RESET}"))
+        else:
+            for (fmt, ptype, failed, exp_d, got_d) in self.recent_failures:
+                diffs: list[str] = []
+                for ff in failed[:2]:
+                    e = (exp_d.get(ff) or "")
+                    g = (got_d.get(ff) or "")
+                    if e and not g:
+                        diffs.append(f"{ff}→∅")
+                    elif g and not e:
+                        diffs.append(f"∅→{ff}='{g}'")
+                    else:
+                        diffs.append(f"{ff}:'{e}'≠'{g}'")
+                if len(failed) > 2:
+                    diffs.append(f"+{len(failed) - 2} more")
+                addr_s = (fmt[:27] + "…") if len(fmt) > 28 else fmt
+                rows.append(self._row(
+                    f"  {_A_RED}✗{_A_RESET} [{ptype[:10]:<10}]"
+                    f" {addr_s!r:<31}  {'  '.join(diffs)}"
+                ))
+
+        rows.append("╚" + "═" * _DASH_IW + "╝")
+
+        # ── overwrite previous render ─────────────────────────────────────
+        if self._rendered:
+            sys.stdout.write(f"\033[{self._rendered}A")
+        for r in rows:
+            sys.stdout.write(f"\033[2K\r{r}\n")
+        sys.stdout.flush()
+        self._rendered = len(rows)
+
+    def finalize(self) -> None:
+        """Force a final render, restore cursor, emit summary log line."""
+        self._render()
+        elapsed = time.monotonic() - self._start
+        sys.stdout.write(_A_SHOW_CUR + "\n")
+        sys.stdout.flush()
+        log.info(
+            "Test complete: %d perms  %d sources  pass %.2f%%  %.1fs",
+            self.total_perms,
+            self.source_count,
+            100 * self.pass_count / self.total_perms if self.total_perms else 0.0,
+            elapsed,
+        )
+
+
+def run_test_mode(
+    stream: Iterator[AddressRecord],
+    lookups: AbbrevLookups,
+    address_parser: object,
+    args: argparse.Namespace,
+) -> None:
+    """Evaluate the trained model against generated address permutations.
+
+    For each source address: generate all permutations, run each through the
+    parser, compare output to the expected field_values dict. Writes a CSV
+    with one row per permutation and renders a live ANSI dashboard while running.
+    """
+    output_path = args.output
+    if dirpart := os.path.dirname(output_path):
+        os.makedirs(dirpart, exist_ok=True)
+
+    total_hint = args.limit * args.max_perms if args.limit else None
+    rng = random.Random(args.seed)
+    dash = LiveDashboard(total_perms_hint=total_hint)
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(TEST_CSV_COLUMNS)
+
+        for rec in stream:
+            dash.new_source()
+            perms = generate_permutations(
+                rec,
+                lookups,
+                max_perms=args.max_perms,
+                include_noisy=args.noisy,
+                rng=rng,
+            )
+            for formatted, ptype, field_values in perms:
+                got = address_parser.parse(formatted)  # type: ignore[attr-defined]
+                # Normalise fused expected values (e.g. unit_number="Unit59" → unit_type="Unit",
+                # unit_number="59") so both sides of compare_address use the same representation.
+                expected = split_fused_tokens(dict(field_values))  # type: ignore[attr-defined]
+                passed, failed_fields, field_results = compare_address(expected, got)
+                dash.record(formatted, ptype, passed, failed_fields, field_results, expected, got)
+                writer.writerow([
+                    formatted,
+                    ptype,
+                    "1" if passed else "0",
+                    ",".join(failed_fields),
+                    *[(expected.get(f) or "") for f in TEST_COMPARE_FIELDS],
+                    *[(got.get(f) or "")      for f in TEST_COMPARE_FIELDS],
+                ])
+
+    dash.finalize()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -685,7 +1008,20 @@ def main() -> None:
     parser.add_argument("--noisy", action="store_true", help="Include noisy/dirty permutations")
     parser.add_argument("--parquet", action="store_true", help="Output Parquet instead of CSV")
     parser.add_argument("--batch-size", type=int, default=5000, help="DB cursor batch size")
+    parser.add_argument(
+        "--test", action="store_true",
+        help=(
+            "Evaluate the trained model: generate permutations, parse each through the "
+            "address parser, and write a test-report CSV to --output. "
+            "Use ADDRESS_MODEL_DIR env var to override model path (default: training/model). "
+            "Compatible with --limit, --states, --seed, --max-perms, --noisy, --gnaf-pid. "
+            "Mutually exclusive with --training and --parquet."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.test and args.training:
+        parser.error("--test cannot be combined with --training")
 
     rng = random.Random(args.seed)
 
@@ -703,16 +1039,48 @@ def main() -> None:
     )
     log.info("AbbrevLookups built.")
 
+    log.info("Loading corner (CD) aliases…")
+    corner_aliases = load_corner_aliases(conn)
+
+    states = [s.upper() for s in args.states] if args.states else [
+        "QLD", "NSW", "VIC", "SA", "WA", "TAS", "NT", "ACT"
+    ]
+
+    if args.test:
+        model_dir = os.getenv("ADDRESS_MODEL_DIR", "training/model")
+        try:
+            # Lazy import — torch/transformers not always installed in this venv
+            from service.address_parser import AddressParser, split_fused_tokens
+        except ImportError as exc:
+            conn.close()
+            sys.exit(f"--test requires torch and transformers to be installed: {exc}")
+        log.info("Loading address parser from %s…", model_dir)
+        try:
+            address_parser = AddressParser(model_dir)
+        except Exception as exc:
+            conn.close()
+            sys.exit(f"Failed to load model from {model_dir!r}: {exc}")
+        log.info("Model ready.")
+        stream = stream_gnaf(
+            conn, states, args.limit,
+            street_type_aut, flat_type_aut, level_type_aut, street_suffix_aut,
+            corner_aliases=corner_aliases,
+            seed=args.seed,
+            batch_size=args.batch_size,
+            gnaf_pid=args.gnaf_pid,
+        )
+        try:
+            run_test_mode(stream, lookups, address_parser, args)
+        finally:
+            conn.close()
+        return
+
     output_path = args.output
     writer: CsvWriter | ParquetWriter
     if args.parquet:
         writer = ParquetWriter(output_path)
     else:
         writer = CsvWriter(output_path)
-
-    states = [s.upper() for s in args.states] if args.states else [
-        "QLD", "NSW", "VIC", "SA", "WA", "TAS", "NT", "ACT"
-    ]
 
     source_count = 0
     log_interval = 10_000
@@ -743,9 +1111,6 @@ def main() -> None:
                     "Processed %d source addresses → %d output rows",
                     source_count, writer.rows_written,
                 )
-
-    log.info("Loading corner (CD) aliases…")
-    corner_aliases = load_corner_aliases(conn)
 
     try:
         if args.training:

@@ -249,7 +249,8 @@ def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
         "lot_keyword":   "Lot" if rec.get("lot_number") else "",
         "lot_number":    rec.get("lot_number") or "",
         "street_number": "" if _is_lot_only(rec) else rec["street_number"],
-        "street_number_last": rec.get("street_number_last") or "",
+        # Lot-only addresses have no real street number — blank the range end too.
+        "street_number_last": "" if _is_lot_only(rec) else (rec.get("street_number_last") or ""),
         "street_name":   _tc(rec["street_name"]),
         "street_type":   _tc(rec.get("street_type")) or "",
         "street_suffix": _tc(rec.get("street_suffix")) or "",
@@ -386,8 +387,8 @@ def perm_slash_notation(
         street_parts.append(_tc(rec["street_suffix"]))
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    # unit_type is absent (slash replaces it); street_type may be abbreviated
-    fvals = {**_canonical_fields(rec), "unit_type": "", "street_type": st or ""}
+    # unit_type and building_name absent (slash replaces unit type; building omitted); street_type may be abbreviated
+    fvals = {**_canonical_fields(rec), "building_name": "", "unit_type": "", "street_type": st or ""}
     return [(full, "slash_notation", fvals)]
 
 
@@ -414,8 +415,8 @@ def perm_slash_unit_level_street(
         street_parts.append(_tc(rec["street_suffix"]))
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    # unit_type and level_type absent; street_type may be abbreviated
-    fvals = {**_canonical_fields(rec), "unit_type": "", "level_type": "", "street_type": st or ""}
+    # unit_type, level_type and building_name absent; street_type may be abbreviated
+    fvals = {**_canonical_fields(rec), "building_name": "", "unit_type": "", "level_type": "", "street_type": st or ""}
     return [(full, "slash_unit_level_street", fvals)]
 
 
@@ -445,7 +446,8 @@ def perm_slash_with_type(
         street_parts.append(sfx)
     street_str = " ".join(street_parts)
     full = _assemble([street_str, _locality_block(rec)])
-    return [(full, "slash_with_type", _canonical_fields(rec))]
+    # Building is not included in this format — blank it in expected.
+    return [(full, "slash_with_type", {**_canonical_fields(rec), "building_name": ""})]
 
 
 def perm_flat_abbrev_gnaf(
@@ -501,6 +503,55 @@ def perm_flat_no_space(
     # as unit_number so the model learns to label "U4" as B-UNIT_NUMBER.
     fvals = {**_canonical_fields(rec), "unit_type": "", "unit_number": fused}
     return [(addr, "flat_no_space", fvals)]
+
+
+def perm_unit_type_nospace(
+    rec: AddressRecord, lookups: AbbrevLookups
+) -> list[tuple[str, str, dict[str, str]]]:
+    """Full unit type fused with number: 'Unit59', 'Shop301', 'Suite2'.
+
+    Complements perm_flat_no_space (which covers single-letter abbreviations like 'U4').
+    The fused token can't be split at IOB alignment time; the whole thing is labelled
+    as unit_number. split_fused_tokens() in address_parser.py re-splits at inference.
+    """
+    if not rec.get("flat_number") or not rec.get("flat_type"):
+        return []
+    fused = f"{_tc(rec['flat_type'])}{rec['flat_number']}"  # "Unit59"
+    addr = _canonical(rec, unit_str=fused)
+    fvals = {**_canonical_fields(rec), "unit_type": "", "unit_number": fused}
+    return [(addr, "unit_type_nospace", fvals)]
+
+
+def perm_lot_nospace(
+    rec: AddressRecord, lookups: AbbrevLookups
+) -> list[tuple[str, str, dict[str, str]]]:
+    """Lot keyword fused with number: 'Lot163', 'Lot9999'.
+
+    The fused token is labelled as lot_number (lot_keyword absent).
+    split_fused_tokens() strips the "Lot" prefix at inference time.
+    """
+    if not rec.get("lot_number"):
+        return []
+    fused = f"Lot{rec['lot_number']}"  # "Lot163"
+    addr = _canonical(rec).replace(f"Lot {rec['lot_number']}", fused)
+    fvals = {**_canonical_fields(rec), "lot_keyword": "", "lot_number": fused}
+    return [(addr, "lot_nospace", fvals)]
+
+
+def perm_level_nospace(
+    rec: AddressRecord, lookups: AbbrevLookups
+) -> list[tuple[str, str, dict[str, str]]]:
+    """Level type fused with number: 'Level3', 'Floor2'.
+
+    The fused token is labelled as level_number (level_type absent).
+    split_fused_tokens() re-splits at inference time.
+    """
+    if not rec.get("level_number") or not rec.get("level_type"):
+        return []
+    fused = f"{_tc(rec['level_type'])}{rec['level_number']}"  # "Level3"
+    addr = _canonical(rec, level_str=fused)
+    fvals = {**_canonical_fields(rec), "level_type": "", "level_number": fused}
+    return [(addr, "level_nospace", fvals)]
 
 
 def perm_level_abbrev(
@@ -652,7 +703,9 @@ def perm_building_first(
     street = _street_block(rec)
     locality = _locality_block(rec)
     addr = _assemble([building, unit, street, locality])
-    return [(addr, "building_first", _canonical_fields(rec))]
+    # Lot and level are not included in this format — blank them in expected.
+    return [(addr, "building_first", {**_canonical_fields(rec),
+        "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""})]
 
 
 def perm_building_after_unit(
@@ -666,7 +719,9 @@ def perm_building_after_unit(
     street = _street_block(rec)
     locality = _locality_block(rec)
     addr = _assemble([unit, building, street, locality])
-    return [(addr, "building_after_unit", _canonical_fields(rec))]
+    # Lot and level are not included in this format — blank them in expected.
+    return [(addr, "building_after_unit", {**_canonical_fields(rec),
+        "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""})]
 
 
 def perm_building_omitted(
@@ -763,7 +818,8 @@ def perm_number_range_spaced(
     rec: AddressRecord, lookups: AbbrevLookups
 ) -> list[tuple[str, str, dict[str, str]]]:
     """Spaced range: '12 - 14 Smith Street'."""
-    if not rec.get("street_number_last"):
+    # Lot-only addresses have no real street number — a spaced range is nonsensical.
+    if not rec.get("street_number_last") or _is_lot_only(rec):
         return []
     lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     street = _street_block(rec, spaced_range=True)
@@ -851,7 +907,8 @@ def perm_reversed(
     unit = _unit_prefix(rec) if rec.get("flat_number") else ""
     level = _level_prefix(rec) if rec.get("level_number") else ""
     addr = _assemble([locality, unit, level, lot, street])
-    return [(addr, "reversed", _canonical_fields(rec))]
+    # Building is not included in this format — blank it in expected.
+    return [(addr, "reversed", {**_canonical_fields(rec), "building_name": ""})]
 
 
 def perm_postcode_before_suburb(
@@ -898,7 +955,8 @@ def perm_number_prefix(
     level = _level_prefix(rec) if rec.get("level_number") else ""
     lot = f"Lot {rec['lot_number']}" if rec.get("lot_number") else ""
     locality = _locality_block(rec)
-    fvals = _canonical_fields(rec)
+    # Building is not included in this format — blank it in expected.
+    fvals = {**_canonical_fields(rec), "building_name": ""}
     results = []
     for prefix, ptype in [("No. ", "number_prefix_period"), ("No ", "number_prefix_nospace")]:
         street_parts = [f"{prefix}{num}", name]
@@ -1009,6 +1067,9 @@ _OPTIONAL: list = [
     perm_flat_abbrev_gnaf,
     perm_flat_abbrev_informal,
     perm_flat_no_space,
+    perm_unit_type_nospace,
+    perm_lot_nospace,
+    perm_level_nospace,
     perm_slash_unit_level_street,
     perm_slash_with_type,
     perm_level_abbrev,

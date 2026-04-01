@@ -622,22 +622,28 @@ def test_lot_returns_empty_when_no_lot(lookups):
 
 
 def test_all_perms_include_lot_when_lot_present(lookups):
-    """Every permutation for a lot record must contain 'Lot N' — never a bare street address."""
+    """Every permutation for a lot record must contain the lot number — never a bare street address.
+    Accepts spaced ('Lot 20'), fused ('Lot20'), and noisy-double-spaced ('Lot  20') forms.
+    """
+    import re as _re
     rec = _simple_rec(lot_number="20")
     from training.permutations import generate_permutations
     perms = generate_permutations(rec, lookups, max_perms=100, include_noisy=True)
     for addr, ptype, _ in perms:
-        assert "Lot 20" in addr, f"ptype={ptype!r} missing 'Lot 20': {addr!r}"
+        assert _re.search(r"Lot\s*20", addr), f"ptype={ptype!r} missing lot: {addr!r}"
 
 
 def test_all_perms_include_lot_when_unit_and_lot_present(lookups):
-    """Every permutation for a unit+lot record must contain both the unit and 'Lot N'."""
+    """Every permutation for a unit+lot record must contain both the unit and the lot number.
+    Accepts spaced, fused, and noisy-double-spaced lot forms.
+    """
+    import re as _re
     rec = _unit_rec(lot_number="20", street_number="155", street_number_last="157",
                     street_name="Glenmore", street_type="Road", street_type_code="ROAD")
     from training.permutations import generate_permutations
     perms = generate_permutations(rec, lookups, max_perms=100, include_noisy=True)
     for addr, ptype, _ in perms:
-        assert "Lot 20" in addr, f"ptype={ptype!r} missing 'Lot 20': {addr!r}"
+        assert _re.search(r"Lot\s*20", addr), f"ptype={ptype!r} missing lot: {addr!r}"
         assert "9" in addr, f"ptype={ptype!r} missing unit number '9': {addr!r}"
 
 
