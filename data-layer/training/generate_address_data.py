@@ -579,6 +579,9 @@ def stream_gnaf_training(
 # ---------------------------------------------------------------------------
 
 def _row_to_output(rec: AddressRecord, formatted: str, ptype: str, field_values: dict[str, str]) -> list:
+    # For lot-only addresses street_number is the lot fallback — blank it so parquet
+    # columns match what field_values_json (used by prepare_iob) actually labels.
+    is_lot_only = bool(rec.get("lot_number")) and rec["street_number"] == rec.get("lot_number")
     return [
         formatted,
         rec.get("flat_type") or "",
@@ -586,8 +589,8 @@ def _row_to_output(rec: AddressRecord, formatted: str, ptype: str, field_values:
         rec.get("level_type") or "",
         rec.get("level_number") or "",
         rec.get("lot_number") or "",
-        rec["street_number"],
-        rec.get("street_number_last") or "",
+        "" if is_lot_only else rec["street_number"],
+        "" if is_lot_only else (rec.get("street_number_last") or ""),
         rec["street_name"],
         rec.get("street_type") or "",
         rec.get("street_suffix") or "",
