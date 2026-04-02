@@ -29,7 +29,7 @@ MAX_LENGTH = 128
 _UNIT_TYPE_KEYWORDS: Sequence[str] = [
     "Apartment", "Townhouse", "Penthouse", "Warehouse", "Basement",
     "Factory", "Studio", "Office", "Duplex", "Villa", "Room",
-    "Shop", "Flat", "Unit", "Suite", "Shed",
+    "Shop", "Flat", "Unit", "Suite", "Shed", "Site",
 ]
 
 # Level type keywords that can appear fused (e.g. "Level3", "Floor2").

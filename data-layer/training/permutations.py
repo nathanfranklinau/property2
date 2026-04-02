@@ -242,7 +242,7 @@ def _canonical_fields(rec: AddressRecord) -> dict[str, str]:
     """
     return {
         "building_name": _tc(rec.get("building_name")) or "",
-        "unit_type":     _tc(rec.get("flat_type")) or "",
+        "unit_type":     (_tc(rec.get("flat_type")) or "") if rec.get("flat_number") else "",
         "unit_number":   rec.get("flat_number") or "",
         "level_type":    _tc(rec.get("level_type")) or "",
         "level_number":  rec.get("level_number") or "",
@@ -704,8 +704,12 @@ def perm_building_first(
     locality = _locality_block(rec)
     addr = _assemble([building, unit, street, locality])
     # Lot and level are not included in this format — blank them in expected.
-    return [(addr, "building_first", {**_canonical_fields(rec),
-        "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""})]
+    # _street_block always includes the street number (even for lot-only records), so
+    # restore street_number in expected values to match what the formatted address contains.
+    fields = {**_canonical_fields(rec), "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""}
+    if _is_lot_only(rec):
+        fields["street_number"] = rec["street_number"]
+    return [(addr, "building_first", fields)]
 
 
 def perm_building_after_unit(
@@ -720,8 +724,12 @@ def perm_building_after_unit(
     locality = _locality_block(rec)
     addr = _assemble([unit, building, street, locality])
     # Lot and level are not included in this format — blank them in expected.
-    return [(addr, "building_after_unit", {**_canonical_fields(rec),
-        "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""})]
+    # _street_block always includes the street number (even for lot-only records), so
+    # restore street_number in expected values to match what the formatted address contains.
+    fields = {**_canonical_fields(rec), "lot_keyword": "", "lot_number": "", "level_type": "", "level_number": ""}
+    if _is_lot_only(rec):
+        fields["street_number"] = rec["street_number"]
+    return [(addr, "building_after_unit", fields)]
 
 
 def perm_building_omitted(

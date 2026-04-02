@@ -16,7 +16,7 @@ Usage:
         --output training/data/test_results.csv \
         --limit 5000 \
         --seed 23231 \
-        --max-perms 60 \
+        --max-perms 65 \
         --noisy --test
 
 Run from data-layer/ directory.
@@ -184,7 +184,13 @@ _STRATA: list[tuple[str, str, float]] = [
      "AND ad.flat_type_code IS NULL AND ad.level_type_code IS NULL "
      "AND ad.building_name IS NULL AND ad.number_last IS NULL "
      "AND av.street_suffix_code IS NULL",
-     0.28),
+     0.25),
+    # Streets with no street_type_code (e.g. "The Esplanade", "Bendigo Marketplace").
+    # Underrepresented in random sampling (0.91% of GNAF) — dedicated stratum ensures
+    # the model sees enough examples of street_type="" with type-like street names.
+    ("null_type",
+     "AND av.street_type_code IS NULL AND av.number_first IS NOT NULL",
+     0.03),
     # Unit / flat (no level)
     ("unit_only",
      "AND ad.flat_type_code IS NOT NULL AND ad.level_type_code IS NULL",
@@ -279,12 +285,14 @@ def _build_street_number(
 
 
 def _build_flat_number(prefix: str | None, number: str | None, suffix: str | None) -> str | None:
-    if not number:
+    # A flat number can be suffix-only (e.g. GNAF flat_number=NULL, flat_number_suffix=A → "A").
+    if not number and not suffix:
         return None
     parts = []
     if prefix:
         parts.append(prefix.strip())
-    parts.append(str(number).strip())
+    if number:
+        parts.append(str(number).strip())
     if suffix:
         parts.append(suffix.strip())
     return "".join(parts)
@@ -974,6 +982,8 @@ def run_test_mode(
                 rng=rng,
             )
             for formatted, ptype, field_values in perms:
+                if args.no_corner and ptype.startswith("corner"):
+                    continue
                 got = address_parser.parse(formatted)  # type: ignore[attr-defined]
                 # Normalise fused expected values (e.g. unit_number="Unit59" → unit_type="Unit",
                 # unit_number="59") so both sides of compare_address use the same representation.
@@ -1029,6 +1039,10 @@ def main() -> None:
             "Compatible with --limit, --states, --seed, --max-perms, --noisy, --gnaf-pid. "
             "Mutually exclusive with --training and --parquet."
         ),
+    )
+    parser.add_argument(
+        "--no-corner", action="store_true",
+        help="(--test only) Skip corner/cross-street permutations from the test run.",
     )
     args = parser.parse_args()
 
