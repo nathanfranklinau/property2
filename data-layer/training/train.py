@@ -71,6 +71,27 @@ class GracefulStopCallback(TrainerCallback):
         if _stop_requested:
             control.should_training_stop = True
         return control
+
+
+class MinEpochGuardCallback(TrainerCallback):
+    """Suppresses early stopping until at least min_epochs have completed.
+
+    Must be placed AFTER EarlyStoppingCallback in the callbacks list so it fires
+    after EarlyStoppingCallback sets should_training_stop=True and can clear it.
+    """
+
+    def __init__(self, min_epochs: int) -> None:
+        self.min_epochs = min_epochs
+
+    def on_evaluate(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs
+    ) -> TrainerControl:
+        if control.should_training_stop and state.epoch < self.min_epochs:
+            log.info(
+                f"Early stopping suppressed — epoch {state.epoch:.2f} < {self.min_epochs} minimum"
+            )
+            control.should_training_stop = False
+        return control
 DEFAULT_DATASET = "training/data/iob_dataset"
 DEFAULT_OUTPUT = "training/model"
 
@@ -126,6 +147,12 @@ def main() -> None:
         help="Directory to save the trained model and tokenizer",
     )
     parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument(
+        "--min-epochs",
+        type=int,
+        default=1,
+        help="Minimum epochs to complete before early stopping can trigger (default 1).",
+    )
     parser.add_argument(
         "--batch-size",
         type=int,
@@ -287,7 +314,7 @@ def main() -> None:
         logging_steps = 100
     else:
         train_batch = args.batch_size
-        eval_batch = args.batch_size * 2
+        eval_batch = args.batch_size  # match train batch — 2× causes OOM on 12 GB after memory fragmentation
         use_fp16 = not args.no_fp16
         use_bf16 = False
         max_workers = 8
@@ -349,6 +376,7 @@ def main() -> None:
                 early_stopping_patience=5,
                 early_stopping_threshold=0.0,
             ),
+            MinEpochGuardCallback(args.min_epochs),
             GracefulStopCallback(),
         ],
     )
