@@ -14,12 +14,15 @@ Usage (run from data-layer/):
     python -m training.train --l40s
     python -m training.train --a100
     python -m training.train --a40
+    python -m training.train --a16
+    python -m training.train --a16 --gpu-multiplier 4   # 4 GPU slices on a single A16 card
 
 Typical runtime on RTX 3060 (12 GB):  ~1–2 hours for 600k IOB examples, 1 epoch with early stopping.
 Typical runtime on GH200 (96 GB):     ~10–20 minutes for 600k IOB examples.
 Typical runtime on L40S (48 GB):      ~15–30 minutes for 600k IOB examples.
 Typical runtime on A100 PCIe (80 GB): ~15–30 minutes for 600k IOB examples.
 Typical runtime on A40 (48 GB):       ~20–40 minutes for 600k IOB examples.
+Typical runtime on A16 (16 GB/slice): ~45–90 minutes for 600k IOB examples.
 """
 
 import argparse
@@ -202,6 +205,27 @@ def main() -> None:
             "Workers auto-scaled to cpu_count (ceiling 16). Overrides --batch-size and --no-fp16."
         ),
     )
+    parser.add_argument(
+        "--a16",
+        action="store_true",
+        help=(
+            "Optimise for NVIDIA A16 (16 GB GDDR6 per slice, Ampere arch). "
+            "The A16 card has 4 GPU slices — use --gpu-multiplier to scale batch for your slice count. "
+            "Enables bf16, batch_size=64, torch.compile, and persistent workers. "
+            "Workers auto-scaled to cpu_count (ceiling 8). Overrides --batch-size and --no-fp16."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-multiplier",
+        type=float,
+        default=1.0,
+        metavar="{0.25,0.5,1,2,4}",
+        help=(
+            "Scale the preset batch sizes by this multiplier. "
+            "Use 0.25/0.5 for tight VRAM, 2/4 for multi-GPU or larger VRAM. "
+            "E.g. --a16 --gpu-multiplier 4 for all 4 slices of an A16 card (default 1.0)."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -262,6 +286,10 @@ def main() -> None:
     # --l40s:  Ada arch    — bf16, batch=256, torch_compile, eval every 500 steps
     # --a100:  Ampere arch — bf16, batch=512, torch_compile, eval every 500 steps
     # --a40:   Ampere arch — bf16, batch=256, torch_compile, eval every 500 steps
+    # --a16:   Ampere arch — bf16, batch=64,  torch_compile, eval every 2,000 steps (1 slice)
+    #
+    # --gpu-multiplier scales train_batch and eval_batch after preset selection.
+    # Use 0.25/0.5 for tight VRAM, 2/4 for multi-slice/multi-GPU configs.
 
     if args.gh200:
         train_batch = 512
@@ -312,6 +340,20 @@ def main() -> None:
         eval_steps = 500
         save_steps = 500
         logging_steps = 100
+    elif args.a16:
+        # A16: 16 GB GDDR6 per slice, Ampere arch, ~125 TFLOPS BF16
+        # Physical card has 4 GPU slices — base batch tuned for 1 slice (16 GB).
+        # Use --gpu-multiplier 2/4 if running across multiple slices.
+        train_batch = 64
+        eval_batch = 64
+        use_fp16 = False
+        use_bf16 = True
+        max_workers = 8
+        persistent_workers = True
+        torch_compile = True
+        eval_steps = 2_000
+        save_steps = 2_000
+        logging_steps = 500
     else:
         train_batch = args.batch_size
         eval_batch = args.batch_size  # match train batch — 2× causes OOM on 12 GB after memory fragmentation
@@ -328,12 +370,17 @@ def main() -> None:
     # Leaves 2 cores for the main training loop and OS.
     num_workers = max(1, min((os.cpu_count() or 4) - 2, max_workers))
 
+    # Apply GPU multiplier — scales batch sizes for multi-slice or larger-VRAM configs.
+    if args.gpu_multiplier != 1.0:
+        train_batch = max(1, int(train_batch * args.gpu_multiplier))
+        eval_batch = max(1, int(eval_batch * args.gpu_multiplier))
+
     gpu_preset = next(
-        (p for p in ("gh200", "l40s", "a100", "a40") if getattr(args, p, False)), "default"
+        (p for p in ("gh200", "l40s", "a100", "a40", "a16") if getattr(args, p, False)), "default"
     )
     log.info(
         f"GPU preset: {gpu_preset} | bf16={use_bf16} fp16={use_fp16} "
-        f"batch={train_batch} workers={num_workers}/{max_workers} compile={torch_compile}"
+        f"batch={train_batch} (×{args.gpu_multiplier}) workers={num_workers}/{max_workers} compile={torch_compile}"
     )
 
     output_dir = str(args.output)
