@@ -6,8 +6,8 @@ permutations, and writes paired (input, label) rows to CSV or Parquet.
 Usage:
     sh run.sh training/generate_address_data.py \
         --output training/data/address_training.parquet \
-        --limit 300000 \
-        --seed 13123123 \
+        --limit 500000 \
+        --seed 23123123 \
         --max-perms 65 \
         --noisy \
         --parquet
